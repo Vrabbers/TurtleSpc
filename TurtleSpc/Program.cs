@@ -63,7 +63,7 @@ ushort pc;
 byte a, x, y, psw, s;
 byte[] ram;
 
-using (var file = File.Open("test.spc", FileMode.Open, FileAccess.Read))
+using (var file = File.Open(@"C:\Users\vrabb\stuff\projects\TurtleSpc\TurtleSpc\bin\Debug\net9.0\test.spc", FileMode.Open, FileAccess.Read))
 using (var reader = new BinaryReader(file))
 {
     file.Seek(0x25, SeekOrigin.Begin);
@@ -74,8 +74,16 @@ using (var reader = new BinaryReader(file))
     psw = reader.ReadByte();
     s = reader.ReadByte();
     file.Seek(0x100, SeekOrigin.Begin);
-    ram = reader.ReadBytes(0x10000);
+    ram = reader.ReadBytes(0x1_0000);
 }
+
+/*for (int i = 0; i < 0x1_0000; i++)
+{
+    if (i % 16 == 0)
+        Console.Write($"\n{i:X4}: ");
+    Console.Write($"{ram[i]:X2} ");
+}
+Console.WriteLine();*/
 
 var spc = new Spc
 {
@@ -88,4 +96,19 @@ var spc = new Spc
     Mem = ram
 };
 
+spc.OneSample();
+spc.OneSample();
+spc.OneSample();
+spc.OneSample();
+spc.OneSample();
+spc.OneSample();
+spc.OneSample();
+spc.OneSample();
+spc.OneSample();
+spc.OneSample();
+spc.OneSample();
+spc.OneSample();
+spc.OneSample();
+spc.OneSample();
+spc.OneSample();
 spc.OneSample();

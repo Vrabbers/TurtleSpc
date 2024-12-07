@@ -785,7 +785,7 @@ class Spc()
             }
 
             // OR, AND, EOR, CMP, ADC, SBC
-            case var i when (i & 0x0f) >= 4 && (i & 0x0f) <= 4 && i <= 0xb9:
+            case var i when (i & 0x0f) >= 4 && (i & 0x0f) <= 9 && i <= 0xb9:
             {
                 var op = instr >> 5;
                 var addressingMode = instr & 0x1f;
@@ -953,7 +953,7 @@ class Spc()
         Overflow = (lhs & 0x80) == 0x80 && (result & 0x80) == 0x00; // Subtracting has somehow turned number from negative to positive
         HalfCarry = (((lhs) ^ (rhs)) & 0x10) != (result & 0x10); // If the 1st bit of the upper nibble of the result isnt just lhs xor rhs, then a half-carry has happened.
         // TODO: check if this behavior is correct for SBC! Carry flag with SBC is confusing!
-        Carry = result > lhs;
+        Carry = result <= lhs;
         return result;
     }
 
@@ -962,7 +962,7 @@ class Spc()
         byte result = SetNZ((byte)(lhs + rhs + (Carry ? 1 : 0)));
         Overflow = (lhs & 0x80) == 0x00 && (result & 0x80) == 0x80; // Adding has somehow turned number from positive to negative
         HalfCarry = (((lhs) ^ (rhs)) & 0x10) != (result & 0x10); // If the 1st bit of the upper nibble of the result isnt just lhs xor rhs, then a half-carry has happened.
-        Carry = result < lhs;
+        Carry = result <= lhs;
         return result;
     }
 
@@ -970,14 +970,14 @@ class Spc()
     {
         byte result = SetNZ((byte)(lhs - rhs)); // no carry
         Overflow = (lhs & 0x80) == 0x80 && (result & 0x80) == 0x00; // Subtracting has somehow turned number from negative to positive
-        Carry = result > lhs;
+        Carry = result <= lhs;
         return result;
     }
 
     private void Call(int v)
     {
         SP--;
-        WriteWord(SP, PC);
+        WriteWord(0x100 + SP, PC);
         SP--;
         PC = (ushort)v;
     }
