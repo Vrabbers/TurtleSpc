@@ -1,3 +1,5 @@
+namespace TurtleSpc;
+
 using System.Diagnostics;
 
 [Flags]
@@ -20,6 +22,8 @@ class Spc()
     public required byte Y { get; set; }
     public required byte SP { get; set; }
     public required StatusWord Status { get; set; }
+
+    public required Dsp Dsp { get; init; }
 
     private static StatusWord SetBit(StatusWord word, StatusWord flags, bool val)
     {
@@ -93,6 +97,10 @@ class Spc()
     {
         switch (address)
         {
+            case 0xf3:
+                if ((Mem[0xf2] & 0x80) == 0)
+                    Dsp.Write((byte)(Mem[0xf2] & 0x7f), value); // DSP not write protected.
+                return; // DSP address write protected.
             case 0xf1:
                 _timer0Counter = 0;
                 _timer1Counter = 0;
@@ -116,14 +124,14 @@ class Spc()
     private byte Read(int address)
     {
         if (address != 0xff && address != 0xfe && address != 0xfd)
-            return Mem[(ushort) address];
+            return Mem[(ushort) address]; // Regular memory read.
+        if (address == 0xf3)
+            return Dsp.Read((byte)(Mem[0xf2] & 0x7f)); // DSP read
         // Timer out read, must zero out
         var x = Mem[(ushort)address];
         Mem[(ushort)address] = 0;
         return x;
     }
-
-    private short YA => (short)((Y << 8) | A);
 
     public void OneSample()
     {
@@ -131,7 +139,10 @@ class Spc()
         {
             var cycles = StepInstruction();
             if (CheckTimers(cycles))
+            {
+                //Debug.WriteLine("Produce sample.");
                 return;
+            }
         }
     }
 
@@ -143,7 +154,8 @@ class Spc()
         {
             return false;
         }
-        
+        //Debug.WriteLine("64kHz timer tick.");
+
         if ((Control & 0b100) != 0)
         {
             _timer2Counter++;
@@ -156,6 +168,8 @@ class Spc()
 
         if (_cpuTicksElapsed % Division8kHz < oldElapsed % Division8kHz)
         {
+            //Debug.WriteLine("8kHz timer tick.");
+
             if ((Control & 0b001) != 0)
             {
                 _timer0Counter++;
@@ -182,7 +196,7 @@ class Spc()
     private int StepInstruction()
     {
         var instr = Read(PC);
-        Debug.WriteLine($"{instr:X2}@{PC:X4} A:{A:X2} X:{X:X2} Y:{Y:X2} SP:{SP:X2} PSW:{(byte)Status:B8} {Mem[PC]:X2}..{Mem[PC + 1]:X2}..{Mem[PC + 2]:X2}");
+        //Debug.WriteLine($"{instr:X2}@{PC:X4} A:{A:X2} X:{X:X2} Y:{Y:X2} SP:{SP:X2} PSW:{(byte)Status:B8} {Mem[PC]:X2}..{Mem[PC + 1]:X2}..{Mem[PC + 2]:X2} Elapsed: {_cpuTicksElapsed}");
         PC++;
         int addr;
         sbyte rel;

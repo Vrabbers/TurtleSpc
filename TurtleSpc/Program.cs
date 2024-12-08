@@ -59,11 +59,14 @@
 //     SDL_RenderClear(rendererPtr);
 //     SDL_RenderPresent(rendererPtr);
 // }
+using TurtleSpc;
+
 ushort pc;
 byte a, x, y, psw, s;
 byte[] ram;
-
-using (var file = File.Open(@"C:\Users\vrabb\stuff\projects\TurtleSpc\TurtleSpc\bin\Debug\net9.0\test.spc", FileMode.Open, FileAccess.Read))
+var p = Console.ReadLine()!;
+var dsp = new Dsp();
+using (var file = File.Open(p, FileMode.Open, FileAccess.Read))
 using (var reader = new BinaryReader(file))
 {
     file.Seek(0x25, SeekOrigin.Begin);
@@ -75,6 +78,11 @@ using (var reader = new BinaryReader(file))
     s = reader.ReadByte();
     file.Seek(0x100, SeekOrigin.Begin);
     ram = reader.ReadBytes(0x1_0000);
+
+    for (var i = 0; i < 128; i++)
+    {
+        dsp.Write((byte)i, reader.ReadByte());
+    }
 }
 
 /*for (int i = 0; i < 0x1_0000; i++)
@@ -85,6 +93,7 @@ using (var reader = new BinaryReader(file))
 }
 Console.WriteLine();*/
 
+
 var spc = new Spc
 {
     A = a,
@@ -93,22 +102,13 @@ var spc = new Spc
     Status = (StatusWord) psw,
     SP = s,
     PC = pc,
-    Mem = ram
+    Mem = ram,
+    Dsp = dsp
 };
 
-spc.OneSample();
-spc.OneSample();
-spc.OneSample();
-spc.OneSample();
-spc.OneSample();
-spc.OneSample();
-spc.OneSample();
-spc.OneSample();
-spc.OneSample();
-spc.OneSample();
-spc.OneSample();
-spc.OneSample();
-spc.OneSample();
-spc.OneSample();
-spc.OneSample();
-spc.OneSample();
+for (int i = 0; i < 32000 * 4; i++)
+{
+    spc.OneSample();
+}
+
+Console.WriteLine("Done");
