@@ -29,13 +29,7 @@ internal class Spc
 
     public required Dsp Dsp { get; init; }
 
-    private static StatusWord SetBit(StatusWord word, StatusWord flags, bool val)
-    {
-        if (val)
-            return word |= flags;
-        else
-            return word &= ~flags;
-    }
+    private static StatusWord SetBit(StatusWord word, StatusWord flags, bool val) => val ? word | flags : word & ~flags;
 
     private bool Carry
     {
@@ -215,7 +209,7 @@ internal class Spc
     private int StepInstruction()
     {
         var instr = Read(PC);
-        //Debug.WriteLine($"{instr:X2}@{PC:X4} A:{A:X2} X:{X:X2} Y:{Y:X2} SP:{SP:X2} PSW:{(byte)Status:B8} {Mem[PC]:X2}..{Mem[PC + 1]:X2}..{Mem[PC + 2]:X2} Elapsed: {_cpuTicksElapsed}");
+        //Debug.WriteLine($"{instr:X2}@{PC:X4} A:{A:X2} X:{X:X2} Y:{Y:X2} SP:{SP:X2} PSW:{(byte)Status:B8} {Memory[PC]:X2}..{Memory[PC + 1]:X2}..{Memory[PC + 2]:X2} Elapsed: {_cpuTicksElapsed}");
         PC++;
         int addr;
         sbyte rel;

@@ -59,6 +59,8 @@
 //     SDL_RenderClear(rendererPtr);
 //     SDL_RenderPresent(rendererPtr);
 // }
+
+using System.Diagnostics;
 using TurtleSpc;
 
 ushort pc;
@@ -106,7 +108,7 @@ var spc = new Spc
     Dsp = dsp
 };
 
-for (int i = 0; i < 32000 * 4; i++)
+for (var i = 0; i < 32000 * 4; i++)
 {
     spc.OneSample();
 }
