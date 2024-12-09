@@ -1,6 +1,6 @@
 namespace TurtleSpc;
 
-class Dsp()
+internal class Dsp
 {
     public byte[] Registers { get; } = new byte[128];
 

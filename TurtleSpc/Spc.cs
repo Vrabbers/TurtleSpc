@@ -3,7 +3,7 @@ namespace TurtleSpc;
 using System.Diagnostics;
 
 [Flags]
-enum StatusWord : byte
+internal enum StatusWord : byte
 {
     Carry = 1 << 0,
     Zero = 1 << 1,
@@ -15,13 +15,17 @@ enum StatusWord : byte
     Negative = 1 << 7
 }
 
-class Spc()
+internal class Spc
 {
     public required byte A { get; set; }
     public required byte X { get; set; }
     public required byte Y { get; set; }
     public required byte SP { get; set; }
     public required StatusWord Status { get; set; }
+
+    public required ushort PC { get; set; }
+
+    public required byte[] Memory { get; init; }
 
     public required Dsp Dsp { get; init; }
 
@@ -33,63 +37,71 @@ class Spc()
             return word &= ~flags;
     }
 
-    public bool Carry 
+    private bool Carry
     {
         get => Status.HasFlag(StatusWord.Carry);
         set => Status = SetBit(Status, StatusWord.Carry, value);
     }
 
-    public bool Zero 
+    private bool Zero
     {
         get => Status.HasFlag(StatusWord.Zero);
         set => Status = SetBit(Status, StatusWord.Zero, value);
     }
 
-    public bool Negative 
+    private bool Negative
     {
         get => Status.HasFlag(StatusWord.Negative);
         set => Status = SetBit(Status, StatusWord.Negative, value);
     }
 
-    public bool Overflow 
+    private bool Overflow
     {
         get => Status.HasFlag(StatusWord.Overflow);
         set => Status = SetBit(Status, StatusWord.Overflow, value);
     }
 
-    public bool HalfCarry 
+    private bool HalfCarry
     {
         get => Status.HasFlag(StatusWord.HalfCarry);
         set => Status = SetBit(Status, StatusWord.HalfCarry, value);
     }
 
-    public required ushort PC { get; set; }
-
-    public required byte[] Mem { get; init; }
-
     private const int Division64kHz = 1024 / 64;
     private const int Division32kHz = 1024 / 32;
     private const int Division8kHz = 1024 / 8;
-    private ulong _cpuTicksElapsed = 0;
 
-    private int _timer0Counter = 0;
-    private int _timer1Counter = 0;
-    private int _timer2Counter = 0;
-    
+    private const int ControlAddress = 0xf1;
+    private const int DspAddrAddress = 0xf2;
+    private const int DspDataAddress = 0xf3;
+    private const int T0TargetAddress = 0xfa;
+    private const int T1TargetAddress = 0xfb;
+    private const int T2TargetAddress = 0xfc;
+    private const int T0OutAddress = 0xfd;
+    private const int T1OutAddress = 0xfe;
+    private const int T2OutAddress = 0xff;
 
-    private int Timer0Div => Mem[0xfa];
-    
-    private int Timer1Div => Mem[0xfb];
-    
-    private int Timer2Div => Mem[0xfc];
+    private ulong _cpuTicksElapsed;
 
-    private ref byte Timer0Out => ref Mem[0xfd];
-    
-    private ref byte Timer1Out => ref Mem[0xfe];
-    
-    private ref byte Timer2Out => ref Mem[0xff];
+    private int _timer0Counter;
+    private int _timer1Counter;
+    private int _timer2Counter;
 
-    private int Control => Mem[0xf1];
+    private int Control => Memory[ControlAddress];
+
+    private int Timer0Div => Memory[T0TargetAddress];
+
+    private int Timer1Div => Memory[T1TargetAddress];
+
+
+    private int Timer2Div => Memory[T2TargetAddress];
+
+
+    private ref byte Timer0Out => ref Memory[T0OutAddress];
+
+    private ref byte Timer1Out => ref Memory[T1OutAddress];
+
+    private ref byte Timer2Out => ref Memory[T2OutAddress];
 
     private int DirectPageAddress(byte offset) => (Status.HasFlag(StatusWord.DirectPage) ? 0x100 : 0x000) + offset;
 
@@ -97,40 +109,45 @@ class Spc()
     {
         switch (address)
         {
-            case 0xf3:
-                if ((Mem[0xf2] & 0x80) == 0)
-                    Dsp.Write((byte)(Mem[0xf2] & 0x7f), value); // DSP not write protected.
+            case DspDataAddress:
+                if ((Memory[DspAddrAddress] & 0x80) == 0)
+                    Dsp.Write((byte)(Memory[0xf2] & 0x7f), value); // DSP not write protected.
                 return; // DSP address write protected.
-            case 0xf1:
+            case ControlAddress:
                 _timer0Counter = 0;
                 _timer1Counter = 0;
                 _timer2Counter = 0;
                 goto default;
-            case 0xfc:
-                _timer2Counter = 0;
+            case T0TargetAddress:
+                _timer0Counter = 0;
                 goto default;
-            case 0xfb:
+            case T1TargetAddress:
                 _timer1Counter = 0;
                 goto default;
-            case 0xfa:
-                _timer0Counter = 0;
+            case T2TargetAddress:
+                _timer2Counter = 0;
                 goto default;
             default:
-                Mem[(ushort) address] = value;
+                Memory[(ushort)address] = value;
                 return;
         }
     }
 
     private byte Read(int address)
     {
-        if (address != 0xff && address != 0xfe && address != 0xfd)
-            return Mem[(ushort) address]; // Regular memory read.
-        if (address == 0xf3)
-            return Dsp.Read((byte)(Mem[0xf2] & 0x7f)); // DSP read
-        // Timer out read, must zero out
-        var x = Mem[(ushort)address];
-        Mem[(ushort)address] = 0;
-        return x;
+        switch (address)
+        {
+            case DspDataAddress:
+                return Dsp.Read((byte)(Memory[DspAddrAddress] & 0x7f)); // DSP data read
+            case T0OutAddress:
+            case T1OutAddress:
+            case T2OutAddress:
+                var x = Memory[(ushort)address]; // Timer reads reset the timer.
+                Memory[(ushort)address] = 0;
+                return x;
+            default:
+                return Memory[(ushort)address]; // Regular memory read.
+        }
     }
 
     public void OneSample()
@@ -149,7 +166,7 @@ class Spc()
     private bool CheckTimers(int cycles)
     {
         var oldElapsed = _cpuTicksElapsed;
-        _cpuTicksElapsed += (ulong) cycles;
+        _cpuTicksElapsed += (ulong)cycles;
         if (_cpuTicksElapsed % Division64kHz >= oldElapsed % Division64kHz)
         {
             return false;
@@ -179,6 +196,7 @@ class Spc()
                     _timer0Counter = 0;
                 }
             }
+
             if ((Control & 0b010) != 0)
             {
                 _timer1Counter++;
@@ -190,7 +208,8 @@ class Spc()
             }
         }
 
-        return _cpuTicksElapsed % Division32kHz < oldElapsed % Division32kHz; // returns whether DSP should produce sample.
+        return _cpuTicksElapsed % Division32kHz <
+               oldElapsed % Division32kHz; // returns whether DSP should produce sample.
     }
 
     private int StepInstruction()
@@ -207,7 +226,7 @@ class Spc()
             // Misc. instructions
             case 0x00: // NOP
                 return 2;
-            
+
             // Increment and decrement
             case 0x8b: // DEC dp
                 addr = DirectPageAddress(Read(PC++));
@@ -302,7 +321,7 @@ class Spc()
                 return 4;
             case 0x8e: // POP PSW
                 SP++;
-                Status = (StatusWord) Read(0x100 + SP);
+                Status = (StatusWord)Read(0x100 + SP);
                 return 4;
             case 0xae: // POP A
                 SP++;
@@ -384,16 +403,16 @@ class Spc()
 
             // Branches
             case 0x10: // BPL
-                rel = (sbyte) Read(PC++);
+                rel = (sbyte)Read(PC++);
                 if (Negative)
                     return 2;
                 PC = (ushort)(PC + rel);
                 return 4;
             case 0x30: // BMI
-                rel = (sbyte) Read(PC++);
+                rel = (sbyte)Read(PC++);
                 if (!Negative)
                     return 2;
-                PC = (ushort) (PC + rel);
+                PC = (ushort)(PC + rel);
                 return 4;
             case 0x50: // BVC
                 rel = (sbyte)Read(PC++);
@@ -402,37 +421,37 @@ class Spc()
                 PC = (ushort)(PC + rel);
                 return 4;
             case 0x70: // BVS
-                rel = (sbyte) Read(PC++);
+                rel = (sbyte)Read(PC++);
                 if (!Overflow)
                     return 2;
                 PC = (ushort)(PC + rel);
                 return 4;
             case 0x90: // BCC
-                rel = (sbyte) Read(PC++);
+                rel = (sbyte)Read(PC++);
                 if (Carry)
                     return 2;
                 PC = (ushort)(PC + rel);
                 return 4;
             case 0xb0: // BCS
-                rel = (sbyte) Read(PC++);
+                rel = (sbyte)Read(PC++);
                 if (!Carry)
                     return 2;
                 PC = (ushort)(PC + rel);
                 return 4;
             case 0xd0: // BNE
-                rel = (sbyte) Read(PC++);
+                rel = (sbyte)Read(PC++);
                 if (Zero)
                     return 2;
                 PC = (ushort)(PC + rel);
                 return 4;
             case 0xf0: // BEQ
-                rel = (sbyte) Read(PC++);
+                rel = (sbyte)Read(PC++);
                 if (!Zero)
                     return 2;
                 PC = (ushort)(PC + rel);
                 return 4;
             case 0x2f: // BRA
-                rel = (sbyte) Read(PC++);
+                rel = (sbyte)Read(PC++);
                 PC = (ushort)(PC + rel);
                 return 4;
 
@@ -514,39 +533,39 @@ class Spc()
                 val = Read(addr);
                 SetNZ((byte)(A & val));
                 Write(addr, (byte)(val | A));
-                return 6; 
+                return 6;
             case 0x4e: // TCLR1 !imm16
                 addr = ReadImmWord();
                 val = Read(addr);
                 SetNZ((byte)(A & val));
                 Write(addr, (byte)(val & ~A));
-                return 6; 
+                return 6;
 
             // Returns
             case 0x6f: // RET
                 SP++;
                 addr = ReadWord(0x100 + SP);
                 SP++;
-                PC = (ushort) addr;
+                PC = (ushort)addr;
                 return 5;
             case 0x7f: // RETI
                 Status |= StatusWord.Interrupt;
                 SP++;
                 addr = ReadWord(0x100 + SP);
                 SP++;
-                PC = (ushort) addr;
+                PC = (ushort)addr;
                 return 5;
 
             // Word instructions
             case 0x1a: //DECW
                 addr = DirectPageAddress(Read(PC++));
-                valw = ReadWord(addr);
-                WriteWord(addr, SetNZ(valw--));
+                valw = (short)(ReadWord(addr) - 1);
+                WriteWord(addr, SetNZ(valw));
                 return 6;
             case 0x3a: //INCW
                 addr = DirectPageAddress(Read(PC++));
-                valw = ReadWord(addr);
-                WriteWord(addr, SetNZ(valw++));
+                valw = (short)(ReadWord(addr) + 1);
+                WriteWord(addr, SetNZ(valw));
                 return 6;
             case 0x5a: //CMPW YA, dp
                 //TODO: how does this actually work!?
@@ -571,8 +590,8 @@ class Spc()
             case 0x9e: // DIV YA, X
                 valw = (short)((Y << 8) | X);
                 var (nA, nY) = int.DivRem(valw, X);
-                A = SetNZ((byte) nA);
-                Y = (byte) nY;
+                A = SetNZ((byte)nA);
+                Y = (byte)nY;
                 Overflow = (nA & 0x100) != 0;
                 // TODO: How is H set?!?
                 return 12;
@@ -755,7 +774,7 @@ class Spc()
                 return 5;
 
             // Set and clear bit
-            case var i when (i & 0b0000_1111) == 0b0000_0010: //SET1 dp.b and CLR1 dp.b
+            case var _ when (instr & 0b0000_1111) == 0b0000_0010: //SET1 dp.b and CLR1 dp.b
             {
                 var dpOffset = Read(PC++);
                 addr = DirectPageAddress(dpOffset);
@@ -771,15 +790,15 @@ class Spc()
             }
 
             //BBC and BBS
-            case var i when (i & 0x0f) == 0x03:
+            case var _ when (instr & 0x0f) == 0x03:
             {
                 var dpOffset = Read(PC++); // TODO: Check this order! and whether the correction works
-                rel = (sbyte) Read(PC++);
+                rel = (sbyte)Read(PC++);
                 var bit = (instr & 0b1110_0000) >> 5;
                 var mask = (byte)(1 << bit);
                 addr = DirectPageAddress(dpOffset);
                 var value = Read(addr);
-                var br = false;
+                bool br;
                 if ((instr & 0b0001_0000) == 0) //BBS
                     br = (value & mask) != 0;
                 else // BBC
@@ -791,7 +810,7 @@ class Spc()
             }
 
             // TCALL x
-            case var i when (i & 0x0f) == 0x01:
+            case var _ when (instr & 0x0f) == 0x01:
             {
                 addr = 0xffc0 + 2 * (instr >> 4);
                 Call(ReadWord(addr));
@@ -799,15 +818,15 @@ class Spc()
             }
 
             // OR, AND, EOR, CMP, ADC, SBC
-            case var i when (i & 0x0f) >= 4 && (i & 0x0f) <= 9 && i <= 0xb9:
+            case var _ when (instr & 0x0f) >= 4 && (instr & 0x0f) <= 9 && instr <= 0xb9:
             {
                 var op = instr >> 5;
                 var addressingMode = instr & 0x1f;
 
-                byte lhs = A; // lots of cases use this so we set it here
+                var lhs = A; // lots of cases use this so we set it here
                 byte rhs;
 
-                byte op1 = 0;
+                byte op1;
                 byte op2 = 0;
 
                 // Sets lhs, rhs, and reads required operands
@@ -852,7 +871,7 @@ class Spc()
                         addr = ReadWord(indirectAddress);
                         rhs = Read(addr + Y); // TODO: does this addition have carry?
                         break;
-                    
+
                     case 0x09: // dpdest, dpsrc
                         op1 = Read(PC++);
                         op2 = Read(PC++);
@@ -931,7 +950,7 @@ class Spc()
                     0x16 => 5, // A, !imm16 + Y
                     0x17 => 6, // A, [dp] + Y
                     0x18 => 5, // dp, #imm8
-                    0x19 => 5,  // (X), (Y)
+                    0x19 => 5, // (X), (Y)
                     _ => throw new UnreachableException()
                 };
             }
@@ -963,9 +982,11 @@ class Spc()
 
     private byte SbcOperation(byte lhs, byte rhs)
     {
-        byte result = SetNZ((byte)(lhs - rhs - (Carry ? 0 : 1)));
-        Overflow = (lhs & 0x80) == 0x80 && (result & 0x80) == 0x00; // Subtracting has somehow turned number from negative to positive
-        HalfCarry = (((lhs) ^ (rhs)) & 0x10) != (result & 0x10); // If the 1st bit of the upper nibble of the result isnt just lhs xor rhs, then a half-carry has happened.
+        var result = SetNZ((byte)(lhs - rhs - (Carry ? 0 : 1)));
+        Overflow = (lhs & 0x80) == 0x80 &&
+                   (result & 0x80) == 0x00; // Subtracting has somehow turned number from negative to positive
+        HalfCarry = (((lhs) ^ (rhs)) & 0x10) !=
+                    (result & 0x10); // If the 1st bit of the upper nibble of the result isnt just lhs xor rhs, then a half-carry has happened.
         // TODO: check if this behavior is correct for SBC! Carry flag with SBC is confusing!
         Carry = result <= lhs;
         return result;
@@ -973,17 +994,20 @@ class Spc()
 
     private byte AdcOperation(byte lhs, byte rhs)
     {
-        byte result = SetNZ((byte)(lhs + rhs + (Carry ? 1 : 0)));
-        Overflow = (lhs & 0x80) == 0x00 && (result & 0x80) == 0x80; // Adding has somehow turned number from positive to negative
-        HalfCarry = (((lhs) ^ (rhs)) & 0x10) != (result & 0x10); // If the 1st bit of the upper nibble of the result isnt just lhs xor rhs, then a half-carry has happened.
+        var result = SetNZ((byte)(lhs + rhs + (Carry ? 1 : 0)));
+        Overflow = (lhs & 0x80) == 0x00 &&
+                   (result & 0x80) == 0x80; // Adding has somehow turned number from positive to negative
+        HalfCarry = (((lhs) ^ (rhs)) & 0x10) !=
+                    (result & 0x10); // If the 1st bit of the upper nibble of the result isnt just lhs xor rhs, then a half-carry has happened.
         Carry = result <= lhs;
         return result;
     }
 
     private byte CmpOperation(byte lhs, byte rhs)
     {
-        byte result = SetNZ((byte)(lhs - rhs)); // no carry
-        Overflow = (lhs & 0x80) == 0x80 && (result & 0x80) == 0x00; // Subtracting has somehow turned number from negative to positive
+        var result = SetNZ((byte)(lhs - rhs)); // no carry
+        Overflow = (lhs & 0x80) == 0x80 &&
+                   (result & 0x80) == 0x00; // Subtracting has somehow turned number from negative to positive
         Carry = result <= lhs;
         return result;
     }
@@ -999,25 +1023,25 @@ class Spc()
     private byte ArithmeticShiftLeft(byte value)
     {
         Carry = value >= 0x80;
-        return SetNZ((byte) (value << 1));
+        return SetNZ((byte)(value << 1));
     }
 
     private byte LogicalShiftRight(byte value)
     {
         Carry = (value & 1) == 1;
-        return SetNZ((byte) (value >> 1));
+        return SetNZ((byte)(value >> 1));
     }
 
     private byte RotateLeft(byte value)
     {
         Carry = value >= 0x80;
-        return SetNZ((byte) ((value << 1) | (Carry ? 1 : 0)));
+        return SetNZ((byte)((value << 1) | (Carry ? 1 : 0)));
     }
 
     private byte RotateRight(byte value)
     {
         Carry = (value & 1) == 1;
-        return SetNZ((byte) ((value >> 1) | (Carry ? 0x80 : 0)));
+        return SetNZ((byte)((value >> 1) | (Carry ? 0x80 : 0)));
     }
 
     // Sets N and Z flags appropriately, passing the value through.

@@ -102,7 +102,7 @@ var spc = new Spc
     Status = (StatusWord) psw,
     SP = s,
     PC = pc,
-    Mem = ram,
+    Memory = ram,
     Dsp = dsp
 };
 
