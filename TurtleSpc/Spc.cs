@@ -75,7 +75,7 @@ internal class Spc
     private const int T1OutAddress = 0xfe;
     private const int T2OutAddress = 0xff;
 
-    private ulong _cpuTicksElapsed;
+    internal ulong _cpuTicksElapsed;
 
     private int _timer0Counter;
     private int _timer1Counter;
@@ -127,7 +127,7 @@ internal class Spc
         }
     }
 
-    private byte Read(int address)
+    internal byte Read(int address)
     {
         switch (address)
         {
@@ -144,15 +144,14 @@ internal class Spc
         }
     }
 
-    public void OneSample()
+    public (short L, short R) OneSample()
     {
         while (true)
         {
             var cycles = StepInstruction();
             if (CheckTimers(cycles))
             {
-                //Debug.WriteLine("Produce sample.");
-                return;
+                return Dsp.OneSample();
             }
         }
     }
@@ -165,7 +164,7 @@ internal class Spc
         {
             return false;
         }
-        //Debug.WriteLine("64kHz timer tick.");
+        //Console.WriteLine("64kHz timer tick.");
 
         if ((Control & 0b100) != 0)
         {
@@ -179,7 +178,7 @@ internal class Spc
 
         if (_cpuTicksElapsed % Division8kHz < oldElapsed % Division8kHz)
         {
-            //Debug.WriteLine("8kHz timer tick.");
+            //Console.WriteLine("8kHz timer tick.");
 
             if ((Control & 0b001) != 0)
             {
@@ -209,7 +208,7 @@ internal class Spc
     private int StepInstruction()
     {
         var instr = Read(PC);
-        //Debug.WriteLine($"{instr:X2}@{PC:X4} A:{A:X2} X:{X:X2} Y:{Y:X2} SP:{SP:X2} PSW:{(byte)Status:B8} {Memory[PC]:X2}..{Memory[PC + 1]:X2}..{Memory[PC + 2]:X2} Elapsed: {_cpuTicksElapsed}");
+        Console.WriteLine($"{PC:X4}  A:{A:X2} X:{X:X2} Y:{Y:X2} SP:{SP:X2} PSW:{(byte)Status:X2}");
         PC++;
         int addr;
         sbyte rel;
@@ -569,12 +568,14 @@ internal class Spc
                 valw = ReadWord(DirectPageAddress(Read(PC++)));
                 A = AdcOperation(A, (byte)valw);
                 Y = AdcOperation(Y, (byte)(valw >> 8));
+                SetNZ((Y << 8 | A));
                 return 5;
             case 0x9a: // SUBW YA, dp
                 Carry = true;
                 valw = ReadWord(DirectPageAddress(Read(PC++)));
                 A = SbcOperation(A, (byte)valw);
                 Y = SbcOperation(Y, (byte)(valw >> 8));
+                SetNZ((Y << 8 | A));
                 return 5;
             case 0xcf: // MUL YA
                 valw = (short)(Y * A); //TODO: is this signed or unsigned?
@@ -582,7 +583,7 @@ internal class Spc
                 Y = SetNZ((byte)(valw >> 8));
                 return 9;
             case 0x9e: // DIV YA, X
-                valw = (short)((Y << 8) | X);
+                valw = (short)((Y << 8) | A);
                 var (nA, nY) = int.DivRem(valw, X);
                 A = SetNZ((byte)nA);
                 Y = (byte)nY;
@@ -716,7 +717,7 @@ internal class Spc
                 A = SetNZ(Read(DirectPageAddress(X)));
                 return 3;
             case 0xe7: // A, [dp+X]
-                addr = DirectPageAddress((byte)(Read(PC++) + X));
+                addr = ReadWord(DirectPageAddress((byte)(Read(PC++) + X)));
                 A = SetNZ(Read(addr));
                 return 6;
             case 0xe9: // X, !imm16
@@ -744,7 +745,7 @@ internal class Spc
                 A = SetNZ(Read(addr));
                 return 5;
             case 0xf7: // A, [dp] + Y
-                addr = DirectPageAddress(Read(PC++));
+                addr = ReadWord(DirectPageAddress(Read(PC++)));
                 A = SetNZ(Read(addr + Y));
                 return 6;
             case 0xf8: // X, dp
@@ -889,7 +890,7 @@ internal class Spc
                         throw new UnreachableException();
                 }
 
-                byte result = op switch
+                var result = op switch
                 {
                     0 => SetNZ((byte)(lhs | rhs)),
                     1 => SetNZ((byte)(lhs & rhs)),
@@ -977,32 +978,30 @@ internal class Spc
     private byte SbcOperation(byte lhs, byte rhs)
     {
         var result = SetNZ((byte)(lhs - rhs - (Carry ? 0 : 1)));
-        Overflow = (lhs & 0x80) == 0x80 &&
-                   (result & 0x80) == 0x00; // Subtracting has somehow turned number from negative to positive
-        HalfCarry = (((lhs) ^ (rhs)) & 0x10) !=
+        Overflow = ((lhs & 0x80) == 0 && (rhs & 0x80) != 0 && (result & 0x80) != 0) ||
+                   ((lhs & 0x80) != 0 && (rhs & 0x80) == 0 && (result & 0x80) == 0);
+        HalfCarry = (((lhs) ^ (-rhs)) & 0x10) !=
                     (result & 0x10); // If the 1st bit of the upper nibble of the result isnt just lhs xor rhs, then a half-carry has happened.
         // TODO: check if this behavior is correct for SBC! Carry flag with SBC is confusing!
-        Carry = result <= lhs;
+        Carry = !(result > lhs);
         return result;
     }
 
     private byte AdcOperation(byte lhs, byte rhs)
     {
         var result = SetNZ((byte)(lhs + rhs + (Carry ? 1 : 0)));
-        Overflow = (lhs & 0x80) == 0x00 &&
-                   (result & 0x80) == 0x80; // Adding has somehow turned number from positive to negative
-        HalfCarry = (((lhs) ^ (rhs)) & 0x10) !=
+        Overflow = ((lhs & 0x80) == 0 && (rhs & 0x80) == 0 && (result & 0x80) != 0) ||
+                   ((lhs & 0x80) != 0 && (rhs & 0x80) != 0 && (result & 0x80) == 0);
+        HalfCarry = ((lhs ^ (rhs)) & 0x10) !=
                     (result & 0x10); // If the 1st bit of the upper nibble of the result isnt just lhs xor rhs, then a half-carry has happened.
-        Carry = result <= lhs;
+        Carry = result < lhs;
         return result;
     }
 
     private byte CmpOperation(byte lhs, byte rhs)
     {
         var result = SetNZ((byte)(lhs - rhs)); // no carry
-        Overflow = (lhs & 0x80) == 0x80 &&
-                   (result & 0x80) == 0x00; // Subtracting has somehow turned number from negative to positive
-        Carry = result <= lhs;
+        Carry = !(result > lhs);
         return result;
     }
 
@@ -1028,14 +1027,16 @@ internal class Spc
 
     private byte RotateLeft(byte value)
     {
+        var newVal = SetNZ((byte)((value << 1) | (Carry ? 1 : 0)));
         Carry = value >= 0x80;
-        return SetNZ((byte)((value << 1) | (Carry ? 1 : 0)));
+        return newVal;
     }
 
     private byte RotateRight(byte value)
     {
+        var newVal = SetNZ((byte)((value >> 1) | (Carry ? 0x80 : 0)));
         Carry = (value & 1) == 1;
-        return SetNZ((byte)((value >> 1) | (Carry ? 0x80 : 0)));
+        return newVal;
     }
 
     // Sets N and Z flags appropriately, passing the value through.
