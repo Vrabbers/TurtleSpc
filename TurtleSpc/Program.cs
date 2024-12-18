@@ -1,19 +1,8 @@
-﻿// See https://aka.ms/new-console-template for more information
-
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
-using SDL3;
 using TurtleSpc;
 using static SDL3.SDL;
-
-/*for (int i = 0; i < 0x1_0000; i++)
-{
-    if (i % 16 == 0)
-        Console.Write($"\n{i:X4}: ");
-    Console.Write($"{ram[i]:X2} ");
-}
-Console.WriteLine();*/
 
 SDL_SetAppMetadata("asdf", "1.0", "br.why.asdf");
 
@@ -24,7 +13,7 @@ if (!SDL_Init(SDL_InitFlags.SDL_INIT_AUDIO | SDL_InitFlags.SDL_INIT_VIDEO))
 
 if (!SDL_CreateWindowAndRenderer("asdf, 640, 480", 640, 480, 0, out var windowPtr, out var rendererPtr))
 {
-    throw null;
+    throw new ApplicationException("Could not initialize SDL window");
 }
 
 var spec = new SDL_AudioSpec
@@ -36,7 +25,10 @@ var spec = new SDL_AudioSpec
 
 var stream = SDL_OpenAudioDeviceStream(unchecked((uint)-1), ref spec, null, nint.Zero);
 
-if (stream == 0) throw null;
+if (stream == nint.Zero)
+{ 
+    throw new ApplicationException("Could not initialize SDL window");
+}
 
 SDL_ResumeAudioStreamDevice(stream);
 
@@ -153,5 +145,3 @@ while (true)
     WriteLine(strb.ToString());
     SDL_RenderPresent(rendererPtr);
 }
-
-

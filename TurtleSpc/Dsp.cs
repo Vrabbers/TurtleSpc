@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
+
 namespace TurtleSpc;
 
 internal enum EnvState
@@ -7,7 +10,7 @@ internal enum EnvState
     Decay,
     Sustain,
 }
-internal class Dsp(byte[] aram)
+internal sealed class Dsp(byte[] aram)
 {
     private static readonly ulong[] TimerDividers =
     [
@@ -47,18 +50,18 @@ internal class Dsp(byte[] aram)
 
     private readonly byte[] _regs = new byte[128];
     private byte[] _aram = aram;
-    private readonly int[] _samplePositions = new int[VoiceCount];
-    private readonly int[] _envVolumes = new int[VoiceCount];
+    private readonly short[] _envVolumes = new short[VoiceCount];
     private readonly EnvState[] _envStates = new EnvState[VoiceCount];
     private byte _lastKeyOn;
-    private readonly int[] _lastSample = new int[VoiceCount];
+    private readonly short[] _lastSample = new short[VoiceCount];
 
     private ushort _noiseSample = 1;
 
     private readonly short[,] _brrDecodeBuffers = new short[12, VoiceCount];
-    private readonly int[] _brrBlockAddress = new int[VoiceCount];
-    private readonly int[] _brrBlockPosition = new int[VoiceCount];
-    private readonly int[] _brrBufferPosition = new int[VoiceCount];
+    private readonly ushort[] _brrBlockAddress = new ushort[VoiceCount];
+    private readonly sbyte[] _brrBlockIndex = new sbyte[VoiceCount];
+    private readonly int[] _brrInterpolatePosition = new int[VoiceCount];
+    private readonly byte[] _brrBufferIndex = new byte[VoiceCount];
 
     internal ulong _counter;
 
@@ -104,9 +107,11 @@ internal class Dsp(byte[] aram)
     private bool EchoDisable => GetBitProperty(_regs[0x6c], 5);
     private int NoiseFrequency => _regs[0x6c] & 0x1f;
 
+
     private void WriteVoiceEndX(bool end, int voice)
     {
-        throw new NotImplementedException();
+        var mask = 1 << voice;
+        _regs[VoiceEnvXAddress] = (byte)(end ? (_regs[EndXAddress] | mask) : (_regs[EndXAddress] & ~mask ));
     }
 
     private sbyte EchoFeedback => (sbyte)_regs[0x0d];
@@ -124,25 +129,16 @@ internal class Dsp(byte[] aram)
 
     private sbyte EchoFilterCoefficients(int index) => (sbyte) _regs[BytePropertyAddress(0x0f, index)];
 
-
-    private static (int Shift, int Filter, bool Loop, bool End) BrrHeaderDecode(byte header) =>
-    (
-        header >> 4,
-        (header >> 2) & 0x03,
-        ((header >> 1) & 0x01) != 0,
-        (header & 0x01) != 0
-    );
-    
-    private int SampleNormalAddress(int voice)
+    private ushort SampleNormalAddress(int voice)
     {
         var basePtr = DirectoryAddress + VoiceSourceNumber(voice) * 4;
-        return _aram[basePtr] | (_aram[basePtr + 1] << 8);
+        return (ushort)(_aram[basePtr] | (_aram[basePtr + 1] << 8));
     }
     
-    private int SampleLoopAddress(int voice)
+    private ushort SampleLoopAddress(int voice)
     {
         var basePtr = DirectoryAddress + VoiceSourceNumber(voice) * 4 + 2;
-        return _aram[basePtr] | (_aram[basePtr + 1] << 8);    
+        return (ushort)(_aram[basePtr] | (_aram[basePtr + 1] << 8));    
     }
 
     private bool ShouldForThisSample(int rate)
@@ -152,23 +148,103 @@ internal class Dsp(byte[] aram)
         return (_counter + TimerOffsets[rate]) % TimerDividers[rate] == 0;
     }
     
+    private static (int Shift, int Filter, bool Loop, bool End) BrrHeaderDecode(byte header) =>
+    (
+        header >> 4,
+        (header >> 2) & 0x03,
+        ((header >> 1) & 0x01) != 0,
+        (header & 0x01) != 0
+    );
+
+    private void DecodeBrrBlock(int voice)
+    {
+        static short SignExtendLower4Bits(byte v)
+        {
+            if ((v & 0b0000_1000) != 0)
+                return (short)((v & 0x0f) | (0xfff0)); 
+            return (short)(v & 0x0f);
+        }
+        var baseBlockAddress = _brrBlockAddress[voice];
+        var (shift, filter, loop, end) = BrrHeaderDecode(_aram[baseBlockAddress]);
+        if (end)
+        {
+            WriteVoiceEndX(true, voice);
+            if (!loop)
+            {
+                _envStates[voice] = EnvState.Release;
+                _envVolumes[voice] = 0;
+            }
+        }
+        var blockIndex = _brrBlockIndex[voice];
+
+        var baseDataAddress = baseBlockAddress + 1 + blockIndex / 2;
+
+        Span<short> vals = stackalloc short[4];
+        vals[3] = SignExtendLower4Bits(_aram[(ushort)(baseDataAddress + 1)]);
+        vals[2] = (short)(((sbyte)_aram[(ushort)(baseDataAddress + 1)]) >> 4);
+        vals[1] = SignExtendLower4Bits(_aram[baseDataAddress]);
+        vals[0] = (short)(((sbyte)_aram[baseDataAddress]) >> 4);
+
+        var bufferIndex = _brrBufferIndex[voice];
+        for (var i = 0; i < 4; i++)
+        {
+            var sample = (vals[i] << shift) >> 1;
+
+            var prev1 = bufferIndex - 1;
+            if (prev1 < 0)
+                prev1 += 12;
+            var prev2 = bufferIndex - 2;
+            if (prev2 < 0)
+                prev2 += 12;
+
+            sample = filter switch
+            {
+                0 => sample,
+                1 => sample + 15 * _brrDecodeBuffers[prev1, voice] / 16,
+                2 => sample + 61 * _brrDecodeBuffers[prev1, voice] / 32 - 15 * _brrDecodeBuffers[prev2, voice] / 16,
+                3 => sample + 115 * _brrDecodeBuffers[prev1, voice] / 64 - 13 * _brrDecodeBuffers[prev2, voice] / 16,
+                _ => throw new UnreachableException()
+            };
+            _brrDecodeBuffers[bufferIndex, voice] = (short)(short.CreateSaturating(sample) & 0x7fff);
+            bufferIndex++;
+        }
+        Debug.Assert(bufferIndex <= 12);
+        Debug.Assert(blockIndex < 16);
+
+        _brrBufferIndex[voice] = (byte)(bufferIndex == 12 ? 0 : bufferIndex);
+        blockIndex += 4;
+        if (blockIndex == 16)
+        {
+            _brrBlockIndex[voice] = 0;
+            if (end && loop)
+                _brrBlockAddress[voice] = SampleLoopAddress(voice);
+            else
+                _brrBlockAddress[voice] += 9;
+        }
+        else
+        {
+            _brrBlockIndex[voice] = blockIndex;
+        }
+    }
+
     public (short L, short R) OneSample()
     {
         Span<short> samples = stackalloc short[VoiceCount];
         var toggleKeyOn = (byte)(~_lastKeyOn & KeyOn);
-        var doPollKeyOn = _counter % 2 == 0;
+        var pollKeyOn = _counter % 2 == 0;
         for (var voice = 0; voice < VoiceCount; voice++)
         {
-            if (doPollKeyOn)
+            if (pollKeyOn)
             {
                 if (GetBitProperty(toggleKeyOn, voice))
                 {
-                    _brrBufferPosition[voice] = -5;
-                    _brrBlockPosition[voice] = 0;
+                    _brrBlockIndex[voice] = 0;
                     _brrBlockAddress[voice] = SampleNormalAddress(voice);
                     _envStates[voice] = EnvState.Attack;
                     _envVolumes[voice] = 0;
-                    // DECODE a brr group into buffer
+                    _brrInterpolatePosition[voice] = -5;
+                    DecodeBrrBlock(voice);
+                    WriteVoiceEndX(false, voice);
                 }
 
                 if (GetBitProperty(KeyOff, voice))
@@ -179,28 +255,46 @@ internal class Dsp(byte[] aram)
                 _lastKeyOn = KeyOn;
             }
 
-            if (_brrBufferPosition[voice] < 0) // "preparing" sample
+            if (_brrInterpolatePosition[voice] < 0) // "preparing" sample
             {
-                _brrBufferPosition[voice]++;
+                _brrInterpolatePosition[voice]++;
                 samples[voice] = 0;
-                continue; // doesn't go forward...
             }
+            else 
+            {
+                if (_envStates[voice] == EnvState.Release)
+                {
+                    _envVolumes[voice] = (short)int.Max(0, _envVolumes[voice] - 8);
+                }
+                else if (VoiceAdsrEnable(voice))
+                {
+                    
+                }
+                else // VxGAIN type envelope
+                {
+                    
+                }
 
-
-            if (_envStates[voice] == EnvState.Release)
-            {
-                // RELEASE...
+                samples[voice] = (short)(_brrDecodeBuffers[_brrInterpolatePosition[voice] >> 12, voice] >> 8);
+                var oldInterpolatePosition = _brrInterpolatePosition[voice];
+                var newInterpolatePosition = oldInterpolatePosition + VoicePitch(voice);
+                if ((newInterpolatePosition & 0xc000) != (oldInterpolatePosition & 0xc000))
+                    DecodeBrrBlock(voice);
+                if (newInterpolatePosition >= 0xc000)
+                    newInterpolatePosition -= 0xc000;
+                Debug.Assert(newInterpolatePosition < 0xc000);
+                _brrInterpolatePosition[voice] = newInterpolatePosition;
             }
-            else if (VoiceAdsrEnable(voice))
-            {
-                
-            }
-            else // VxGAIN type envelope
-            {
-                
-            }
+            WriteVoiceOutX((sbyte)(samples[voice] >> 8), voice);
+            WriteVoiceEnvX((byte)(_envVolumes[voice] >> 4), voice);
         }
-        var (l, r) = (0, 0);
+        var l = 0;
+        var r = 0;
+        for (var i = 0; i < VoiceCount; i++)
+        {
+            l += samples[i];
+            r += samples[i];
+        }
         _counter++;
         return (short.CreateSaturating(l), short.CreateSaturating(r));
     }

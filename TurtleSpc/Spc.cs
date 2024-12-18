@@ -15,7 +15,7 @@ internal enum StatusWord : byte
     Negative = 1 << 7
 }
 
-internal class Spc
+internal sealed class Spc
 {
     public required byte A { get; set; }
     public required byte X { get; set; }
