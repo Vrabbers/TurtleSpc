@@ -31,6 +31,37 @@ internal class Spc
 
     private static StatusWord SetBit(StatusWord word, StatusWord flags, bool val) => val ? word | flags : word & ~flags;
 
+    public static Spc FromSpcFileStream(Stream stream)
+    {
+        using var reader = new BinaryReader(stream);
+        stream.Seek(0x25, SeekOrigin.Begin);
+        var pc = reader.ReadUInt16();
+        var a = reader.ReadByte();
+        var x = reader.ReadByte();
+        var y = reader.ReadByte();
+        var psw = (StatusWord) reader.ReadByte();
+        var s = reader.ReadByte();
+        stream.Seek(0x100, SeekOrigin.Begin);
+        var ram = reader.ReadBytes(0x1_0000);
+        var dsp = new Dsp(ram);
+        for (var i = 0; i < 128; i++)
+        {
+            dsp.Write((byte)i, reader.ReadByte());
+        }
+        var spc = new Spc
+        {
+            A = a,
+            X = x,
+            Y = y,
+            Status = psw,
+            SP = s,
+            PC = pc,
+            Memory = ram,
+            Dsp = dsp
+        };
+        return spc;
+    }
+    
     private bool Carry
     {
         get => Status.HasFlag(StatusWord.Carry);
@@ -108,9 +139,22 @@ internal class Spc
                     Dsp.Write((byte)(Memory[0xf2] & 0x7f), value); // DSP not write protected.
                 return; // DSP address write protected.
             case ControlAddress:
-                _timer0Counter = 0;
-                _timer1Counter = 0;
-                _timer2Counter = 0;
+                var timersShouldClear = ~Control & value;
+                if ((timersShouldClear & 0b001) != 0)
+                {
+                    _timer0Counter = 0;
+                    Timer0Out = 0;
+                }
+                if ((timersShouldClear & 0b010) != 0)
+                {
+                    _timer1Counter = 0;
+                    Timer1Out = 0;
+                }
+                if ((timersShouldClear & 0b100) != 0)
+                {
+                    _timer2Counter = 0;
+                    Timer2Out = 0;
+                }
                 goto default;
             case T0TargetAddress:
                 _timer0Counter = 0;
@@ -121,6 +165,11 @@ internal class Spc
             case T2TargetAddress:
                 _timer2Counter = 0;
                 goto default;
+            case 0xf4:
+            case 0xf5:
+            case 0xf6:
+            case 0xf7:
+                return;
             default:
                 Memory[(ushort)address] = value;
                 return;
@@ -168,8 +217,7 @@ internal class Spc
 
         if ((Control & 0b100) != 0)
         {
-            _timer2Counter++;
-            if (_timer2Counter == Timer2Div)
+            if (_timer2Counter++ == Timer2Div)
             {
                 Timer2Out = (byte)((Timer2Out + 1) & 0x0f);
                 _timer2Counter = 0;
@@ -182,8 +230,7 @@ internal class Spc
 
             if ((Control & 0b001) != 0)
             {
-                _timer0Counter++;
-                if (_timer0Counter == Timer0Div)
+                if (_timer0Counter++ == Timer0Div)
                 {
                     Timer0Out = (byte)((Timer0Out + 1) & 0x0f);
                     _timer0Counter = 0;
@@ -192,8 +239,7 @@ internal class Spc
 
             if ((Control & 0b010) != 0)
             {
-                _timer1Counter++;
-                if (_timer1Counter == Timer1Div)
+                if (_timer1Counter++ == Timer1Div)
                 {
                     Timer1Out = (byte)((Timer1Out + 1) & 0x0f);
                     _timer1Counter = 0;
@@ -208,7 +254,7 @@ internal class Spc
     private int StepInstruction()
     {
         var instr = Read(PC);
-        Console.WriteLine($"{PC:X4}  A:{A:X2} X:{X:X2} Y:{Y:X2} SP:{SP:X2} PSW:{(byte)Status:X2}");
+        //Console.WriteLine($"{PC:X4}  A:{A:X2} X:{X:X2} Y:{Y:X2} SP:{SP:X2} PSW:{(byte)Status:X2}");
         PC++;
         int addr;
         sbyte rel;
@@ -584,7 +630,11 @@ internal class Spc
                 return 9;
             case 0x9e: // DIV YA, X
                 valw = (short)((Y << 8) | A);
-                var (nA, nY) = int.DivRem(valw, X);
+                int nA, nY;
+                if (X != 0)
+                    (nA, nY) = int.DivRem(valw, X);
+                else
+                    (nA, nY) = (0x1ff, 0);
                 A = SetNZ((byte)nA);
                 Y = (byte)nY;
                 Overflow = (nA & 0x100) != 0;
@@ -980,7 +1030,7 @@ internal class Spc
         var result = SetNZ((byte)(lhs - rhs - (Carry ? 0 : 1)));
         Overflow = ((lhs & 0x80) == 0 && (rhs & 0x80) != 0 && (result & 0x80) != 0) ||
                    ((lhs & 0x80) != 0 && (rhs & 0x80) == 0 && (result & 0x80) == 0);
-        HalfCarry = (((lhs) ^ (-rhs)) & 0x10) !=
+        HalfCarry = (((lhs) ^ (rhs)) & 0x10) ==
                     (result & 0x10); // If the 1st bit of the upper nibble of the result isnt just lhs xor rhs, then a half-carry has happened.
         // TODO: check if this behavior is correct for SBC! Carry flag with SBC is confusing!
         Carry = !(result > lhs);

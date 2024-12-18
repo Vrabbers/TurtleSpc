@@ -1,34 +1,11 @@
 ﻿// See https://aka.ms/new-console-template for more information
 
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using SDL3;
 using TurtleSpc;
 using static SDL3.SDL;
-
-ushort pc;
-byte a, x, y, psw, s;
-byte[] ram;
-var p = Console.ReadLine()!.Trim('"');
-Dsp dsp;
-using (var file = File.Open(p, FileMode.Open, FileAccess.Read))
-using (var reader = new BinaryReader(file))
-{
-    file.Seek(0x25, SeekOrigin.Begin);
-    pc = reader.ReadUInt16();
-    a = reader.ReadByte();
-    x = reader.ReadByte();
-    y = reader.ReadByte();
-    psw = reader.ReadByte();
-    s = reader.ReadByte();
-    file.Seek(0x100, SeekOrigin.Begin);
-    ram = reader.ReadBytes(0x1_0000);
-    dsp = new Dsp(ram);
-    for (var i = 0; i < 128; i++)
-    {
-        dsp.Write((byte)i, reader.ReadByte());
-    }
-}
 
 /*for (int i = 0; i < 0x1_0000; i++)
 {
@@ -37,19 +14,6 @@ using (var reader = new BinaryReader(file))
     Console.Write($"{ram[i]:X2} ");
 }
 Console.WriteLine();*/
-
-
-var spc = new Spc
-{
-    A = a,
-    X = x,
-    Y = y,
-    Status = (StatusWord) psw,
-    SP = s,
-    PC = pc,
-    Memory = ram,
-    Dsp = dsp
-};
 
 SDL_SetAppMetadata("asdf", "1.0", "br.why.asdf");
 
@@ -77,9 +41,17 @@ if (stream == 0) throw null;
 SDL_ResumeAudioStreamDevice(stream);
 
 Span<short> buf = stackalloc short[1024];
-int total = 0;
+
+Spc? spc = null;
+var dialogOpen = false;
 while (true)
 {
+    var lines = 0;
+    void WriteLine(string s)
+    {
+        SDL_RenderDebugText(rendererPtr, 0, lines * 10, s);
+        lines++;
+    }
     while (SDL_PollEvent(out var @event))
     {
         if (@event.type == (uint)SDL_EventType.SDL_EVENT_QUIT)
@@ -87,20 +59,55 @@ while (true)
             SDL_Quit();
             return;
         }
-    }
-    const int minimumAudio = 16000;
-    var avail = SDL_GetAudioStreamAvailable(stream);
-    if (avail < minimumAudio)
-    {
-        unsafe
-        {
-            for (var i = 0; i < buf.Length / 2; i++)
-            {
-                (buf[2 * i], buf[2 * i + 1]) = spc.OneSample();
-                total++;
-            }
 
-            SDL_PutAudioStreamData(stream, (IntPtr)Unsafe.AsPointer(ref buf[0]), buf.Length * sizeof(short));
+        if (@event is { type: (uint)SDL_EventType.SDL_EVENT_KEY_DOWN, key.key: (uint) SDL_Keycode.SDLK_RETURN }) 
+            spc = null;
+    }
+
+    if (spc is null)
+    {
+        if (!dialogOpen)
+        {
+            dialogOpen = true;
+            SDL_ShowOpenFileDialog((_, fileListPtr, _) =>
+            {
+                unsafe
+                {
+                    if (fileListPtr == nint.Zero || *(nint*)fileListPtr == nint.Zero)
+                    {
+                        var quitEvent = new SDL_Event
+                        {
+                            quit = new SDL_QuitEvent { type = SDL_EventType.SDL_EVENT_QUIT, timestamp = SDL_GetTicks() }
+                        };
+                        SDL_PushEvent(ref quitEvent);
+                        return;
+                    }
+
+                    var firstString = *(nint*)fileListPtr;
+                    var file = Marshal.PtrToStringUTF8(firstString)!;
+                    using var fileStream = new FileStream(file, FileMode.Open, FileAccess.Read);
+                    spc = Spc.FromSpcFileStream(fileStream);
+                    dialogOpen = false;
+                }
+                
+            }, nint.Zero, windowPtr, [], 0, default_location: null, allow_many:false);
+        }
+    }
+    else
+    {
+        const int minimumAudio = 16000;
+        var avail = SDL_GetAudioStreamAvailable(stream);
+        if (avail < minimumAudio)
+        {
+            unsafe
+            {
+                for (var i = 0; i < buf.Length / 2; i++)
+                {
+                    (buf[2 * i], buf[2 * i + 1]) = spc.OneSample();
+                }
+
+                SDL_PutAudioStreamData(stream, (IntPtr)Unsafe.AsPointer(ref buf[0]), buf.Length * sizeof(short));
+            }
         }
     }
 
@@ -109,19 +116,41 @@ while (true)
     SDL_RenderClear(rendererPtr);
 
     SDL_SetRenderDrawColor(rendererPtr, 255, 255, 255, 255);
+    WriteLine("TurtleSpc");
 
-    SDL_RenderDebugText(rendererPtr, 0, 0, $"Sample counter: {dsp._counter} PC: {spc.PC:X4}");
+    if (spc is null)
+    {
+        SDL_RenderPresent(rendererPtr);
+        continue;
+    }
 
+    WriteLine($"PC:{spc.PC:X4} A:{spc.A:X2} X:{spc.X:X2} Y:{spc.Y:X2} SP:{spc.SP:X2} PSW:{(byte)spc.Status:B8} Elapsed:{spc.Dsp._counter / 32000.0}s");
+
+    WriteLine("DSP Registers: ");
+    var strb = new StringBuilder();
     for (int i = 0; i < 8; i++)
     {
-        var strb = new StringBuilder();
+        strb.Clear();
         strb.Append($"{i << 4:X2}: ");
         for (int j = 0; j < 16; j++)
         {
-            strb.AppendFormat("{0:X2} ", dsp.Read((byte)((i << 4) | j)));
+            strb.Append($"{spc.Dsp.Read((byte)((i << 4) | j)):X2} ");
         }
-        SDL_RenderDebugText(rendererPtr, 0, 12 + i * 12, strb.ToString());
+        WriteLine(strb.ToString());
     }
+    WriteLine("SPC Memory:");
+    strb.Clear();
+    for (int i = 0; i < 32; i++)
+    {
+        strb.Clear();
+        strb.Append($"{i << 4:X4}: ");
+        for (int j = 0; j < 16; j++)
+        {
+            strb.Append($"{spc.Memory[(i << 4) | j]:X2} ");
+        }
+        WriteLine(strb.ToString());
+    }
+    WriteLine(strb.ToString());
     SDL_RenderPresent(rendererPtr);
 }
 
