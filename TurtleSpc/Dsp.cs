@@ -57,7 +57,7 @@ internal sealed class Dsp(byte[] aram)
 
     private ushort _noiseSample = 1;
 
-    private readonly short[,] _brrDecodeBuffers = new short[12, VoiceCount];
+    private readonly short[,] _brrDecodeBuffers = new short[VoiceCount, 12];
     private readonly ushort[] _brrBlockAddress = new ushort[VoiceCount];
     private readonly sbyte[] _brrBlockIndex = new sbyte[VoiceCount];
     private readonly int[] _brrInterpolatePosition = new int[VoiceCount];
@@ -72,7 +72,7 @@ internal sealed class Dsp(byte[] aram)
     private sbyte VoiceVolLeft(int voice) => (sbyte)_regs[BytePropertyAddress(0x0, voice)];
     private sbyte VoiceVolRight(int voice) => (sbyte)_regs[BytePropertyAddress(0x1, voice)];
 
-    private int VoicePitch(int voice) => _regs[BytePropertyAddress(0x2, voice)] | (_regs[BytePropertyAddress(0x3, voice)] << 8);
+    private int VoicePitch(int voice) => (_regs[BytePropertyAddress(0x2, voice)] | (_regs[BytePropertyAddress(0x3, voice)] << 8)) & 0x3fff;
 
     private byte VoiceSourceNumber(int voice) => _regs[BytePropertyAddress(0x4, voice)];
 
@@ -138,7 +138,7 @@ internal sealed class Dsp(byte[] aram)
     private ushort SampleLoopAddress(int voice)
     {
         var basePtr = DirectoryAddress + VoiceSourceNumber(voice) * 4 + 2;
-        return (ushort)(_aram[basePtr] | (_aram[basePtr + 1] << 8));    
+        return (ushort)(_aram[basePtr] | (_aram[basePtr + 1] << 8));
     }
 
     private bool ShouldForThisSample(int rate)
@@ -152,7 +152,7 @@ internal sealed class Dsp(byte[] aram)
     (
         header >> 4,
         (header >> 2) & 0x03,
-        ((header >> 1) & 0x01) != 0,
+        ((header) & 0x02) != 0,
         (header & 0x01) != 0
     );
 
@@ -177,7 +177,7 @@ internal sealed class Dsp(byte[] aram)
         }
         var blockIndex = _brrBlockIndex[voice];
 
-        var baseDataAddress = baseBlockAddress + 1 + blockIndex / 2;
+        var baseDataAddress = (ushort)(baseBlockAddress + 1 + blockIndex / 2);
 
         Span<short> vals = stackalloc short[4];
         vals[3] = SignExtendLower4Bits(_aram[(ushort)(baseDataAddress + 1)]);
@@ -200,12 +200,12 @@ internal sealed class Dsp(byte[] aram)
             sample = filter switch
             {
                 0 => sample,
-                1 => sample + 15 * _brrDecodeBuffers[prev1, voice] / 16,
-                2 => sample + 61 * _brrDecodeBuffers[prev1, voice] / 32 - 15 * _brrDecodeBuffers[prev2, voice] / 16,
-                3 => sample + 115 * _brrDecodeBuffers[prev1, voice] / 64 - 13 * _brrDecodeBuffers[prev2, voice] / 16,
+                1 => sample + 15 * _brrDecodeBuffers[voice, prev1] / 16,
+                2 => sample + 61 * _brrDecodeBuffers[voice, prev1] / 32 - 15 * _brrDecodeBuffers[voice, prev2] / 16,
+                3 => sample + 115 * _brrDecodeBuffers[voice, prev1] / 64 - 13 * _brrDecodeBuffers[voice, prev2] / 16,
                 _ => throw new UnreachableException()
             };
-            _brrDecodeBuffers[bufferIndex, voice] = (short)(short.CreateSaturating(sample) & 0x7fff);
+            _brrDecodeBuffers[voice, bufferIndex] = (short)(sample & 0xfffe);
             bufferIndex++;
         }
         Debug.Assert(bufferIndex <= 12);
@@ -229,7 +229,8 @@ internal sealed class Dsp(byte[] aram)
 
     public (short L, short R) OneSample()
     {
-        Span<short> samples = stackalloc short[VoiceCount];
+        Span<short> samplesL = stackalloc short[VoiceCount];
+        Span<short> samplesR = stackalloc short[VoiceCount];
         var toggleKeyOn = (byte)(~_lastKeyOn & KeyOn);
         var pollKeyOn = _counter % 2 == 0;
         for (var voice = 0; voice < VoiceCount; voice++)
@@ -241,9 +242,12 @@ internal sealed class Dsp(byte[] aram)
                     _brrBlockIndex[voice] = 0;
                     _brrBlockAddress[voice] = SampleNormalAddress(voice);
                     _envStates[voice] = EnvState.Attack;
-                    _envVolumes[voice] = 0;
+                    _envVolumes[voice] = 0x7ff;
                     _brrInterpolatePosition[voice] = -5;
                     DecodeBrrBlock(voice);
+                    DecodeBrrBlock(voice);
+                    DecodeBrrBlock(voice);
+
                     WriteVoiceEndX(false, voice);
                 }
 
@@ -258,7 +262,9 @@ internal sealed class Dsp(byte[] aram)
             if (_brrInterpolatePosition[voice] < 0) // "preparing" sample
             {
                 _brrInterpolatePosition[voice]++;
-                samples[voice] = 0;
+                samplesL[voice] = 0;
+                samplesR[voice] = 0;
+                WriteVoiceOutX(0, voice);
             }
             else 
             {
@@ -275,25 +281,28 @@ internal sealed class Dsp(byte[] aram)
                     
                 }
 
-                samples[voice] = (short)(_brrDecodeBuffers[_brrInterpolatePosition[voice] >> 12, voice] >> 8);
+                var sample = (int)_brrDecodeBuffers[voice, _brrInterpolatePosition[voice] >> 12];
+                sample = (sample * _envVolumes[voice]) / 0x800;
+                WriteVoiceOutX((sbyte)(sample >> 8), voice);
+                samplesL[voice] = (short)((sample * VoiceVolLeft(voice)) / 0x80);
+                samplesR[voice] = (short)((sample * VoiceVolRight(voice)) / 0x80);
+                
                 var oldInterpolatePosition = _brrInterpolatePosition[voice];
                 var newInterpolatePosition = oldInterpolatePosition + VoicePitch(voice);
                 if ((newInterpolatePosition & 0xc000) != (oldInterpolatePosition & 0xc000))
                     DecodeBrrBlock(voice);
                 if (newInterpolatePosition >= 0xc000)
                     newInterpolatePosition -= 0xc000;
-                Debug.Assert(newInterpolatePosition < 0xc000);
                 _brrInterpolatePosition[voice] = newInterpolatePosition;
             }
-            WriteVoiceOutX((sbyte)(samples[voice] >> 8), voice);
             WriteVoiceEnvX((byte)(_envVolumes[voice] >> 4), voice);
         }
         var l = 0;
         var r = 0;
         for (var i = 0; i < VoiceCount; i++)
         {
-            l += samples[i];
-            r += samples[i];
+            l += samplesL[i];
+            r += samplesR[i];
         }
         _counter++;
         return (short.CreateSaturating(l), short.CreateSaturating(r));

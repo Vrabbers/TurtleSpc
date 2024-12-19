@@ -130,18 +130,5 @@ while (true)
         }
         WriteLine(strb.ToString());
     }
-    WriteLine("SPC Memory:");
-    strb.Clear();
-    for (int i = 0; i < 32; i++)
-    {
-        strb.Clear();
-        strb.Append($"{i << 4:X4}: ");
-        for (int j = 0; j < 16; j++)
-        {
-            strb.Append($"{spc.Memory[(i << 4) | j]:X2} ");
-        }
-        WriteLine(strb.ToString());
-    }
-    WriteLine(strb.ToString());
     SDL_RenderPresent(rendererPtr);
 }
