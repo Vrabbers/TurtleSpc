@@ -3,14 +3,14 @@ using System.Runtime.CompilerServices;
 
 namespace TurtleSpc;
 
-internal enum EnvState
+public enum EnvState
 {
     Release,
     Attack,
     Decay,
     Sustain,
 }
-internal sealed class Dsp(byte[] aram)
+public sealed class Dsp(byte[] aram)
 {
     private static readonly ulong[] TimerDividers =
     [

@@ -1,11 +1,15 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# 
+# Visual Studio Version 17
+VisualStudioVersion = 17.13.35507.96 d17.13
+MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TurtleSpc", "TurtleSpc\TurtleSpc.csproj", "{23274991-31AC-4761-9A19-160A4C45C9BA}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "SDL3-CS", "SDL3-CS", "{AFBF33DB-28E6-4BD2-86C6-CF70FDD21A07}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SDL3.Core", "SDL3-CS\SDL3\SDL3.Core.csproj", "{5EB9B37C-5A64-4C6F-A3D4-ABC5C5E57A14}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestSpc", "TestSpc\TestSpc.csproj", "{049BC576-E3C1-451D-9B36-D145B21C225B}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -21,8 +25,18 @@ Global
 		{5EB9B37C-5A64-4C6F-A3D4-ABC5C5E57A14}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{5EB9B37C-5A64-4C6F-A3D4-ABC5C5E57A14}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{5EB9B37C-5A64-4C6F-A3D4-ABC5C5E57A14}.Release|Any CPU.Build.0 = Release|Any CPU
+		{049BC576-E3C1-451D-9B36-D145B21C225B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{049BC576-E3C1-451D-9B36-D145B21C225B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{049BC576-E3C1-451D-9B36-D145B21C225B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{049BC576-E3C1-451D-9B36-D145B21C225B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{5EB9B37C-5A64-4C6F-A3D4-ABC5C5E57A14} = {AFBF33DB-28E6-4BD2-86C6-CF70FDD21A07}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {4035BD6B-835C-44C5-BD5C-0B4B1932B2A9}
 	EndGlobalSection
 EndGlobal

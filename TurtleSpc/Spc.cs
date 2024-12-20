@@ -3,7 +3,7 @@ namespace TurtleSpc;
 using System.Diagnostics;
 
 [Flags]
-internal enum StatusWord : byte
+public enum StatusWord : byte
 {
     Carry = 1 << 0,
     Zero = 1 << 1,
@@ -15,7 +15,7 @@ internal enum StatusWord : byte
     Negative = 1 << 7
 }
 
-internal sealed class Spc
+public sealed class Spc
 {
     public required byte A { get; set; }
     public required byte X { get; set; }
@@ -27,7 +27,7 @@ internal sealed class Spc
 
     public required byte[] Memory { get; init; }
 
-    public required Dsp Dsp { get; init; }
+    public required Dsp? Dsp { get; init; }
 
     private static StatusWord SetBit(StatusWord word, StatusWord flags, bool val) => val ? word | flags : word & ~flags;
 
@@ -132,11 +132,16 @@ internal sealed class Spc
 
     private void Write(int address, byte value)
     {
+        address &= 0xffff;
+#if DEBUG
+        if (Dsp is null)
+            Memory[(ushort)address] = value; // Regular memory read.
+#endif
         switch (address)
         {
             case DspDataAddress:
                 if ((Memory[DspAddrAddress] & 0x80) == 0)
-                    Dsp.Write((byte)(Memory[0xf2] & 0x7f), value); // DSP not write protected.
+                    Dsp?.Write((byte)(Memory[0xf2] & 0x7f), value); // DSP not write protected.
                 return; // DSP address write protected.
             case ControlAddress:
                 var timersShouldClear = ~Control & value;
@@ -178,10 +183,15 @@ internal sealed class Spc
 
     internal byte Read(int address)
     {
+        address &= 0xffff;
+#if DEBUG
+        if (Dsp is null)
+            return Memory[(ushort)address]; // Regular memory read.
+#endif
         switch (address)
         {
             case DspDataAddress:
-                return Dsp.Read((byte)(Memory[DspAddrAddress] & 0x7f)); // DSP data read
+                return Dsp?.Read((byte)(Memory[DspAddrAddress] & 0x7f)) ?? 0; // DSP data read
             case T0OutAddress:
             case T1OutAddress:
             case T2OutAddress:
@@ -200,7 +210,7 @@ internal sealed class Spc
             var cycles = StepInstruction();
             if (CheckTimers(cycles))
             {
-                return Dsp.OneSample();
+                return Dsp?.OneSample() ?? (0, 0);
             }
         }
     }
@@ -251,7 +261,7 @@ internal sealed class Spc
                oldElapsed % Division32kHz; // returns whether DSP should produce sample.
     }
 
-    private int StepInstruction()
+    public int StepInstruction()
     {
         var instr = Read(PC);
         //Console.WriteLine($"{PC:X4}  A:{A:X2} X:{X:X2} Y:{Y:X2} SP:{SP:X2} PSW:{(byte)Status:X2}");
@@ -398,7 +408,7 @@ internal sealed class Spc
             case 0x3b: // ROL dp+X
                 addr = DirectPageAddress((byte)(Read(PC++) + X));
                 Write(addr, RotateLeft(Read(addr)));
-                return 4;
+                return 5;
             case 0x2c: // ROL !imm16
                 addr = ReadImmWord();
                 Write(addr, RotateLeft(Read(addr)));
@@ -522,14 +532,14 @@ internal sealed class Spc
                 rel = (sbyte)Read(PC++);
                 Y--;
                 if (Y == 0)
-                    return 5;
+                    return 4;
                 PC = (ushort)(PC + rel);
-                return 7;
+                return 6;
 
             // Jumps
             case 0x1f: // JMP [!imm16 + X]
                 addr = ReadImmWord() + X;
-                PC = (ushort)ReadWord(addr);
+                PC = (ushort)ReadWordCarry(addr);
                 return 6;
             case 0x5f: // JMP !imm16
                 PC = (ushort)ReadImmWord();
@@ -570,58 +580,61 @@ internal sealed class Spc
             case 0x0e: // TSET1 !imm16
                 addr = ReadImmWord();
                 val = Read(addr);
-                SetNZ((byte)(A & val));
+                SetNZ((byte)(A - val));
                 Write(addr, (byte)(val | A));
                 return 6;
             case 0x4e: // TCLR1 !imm16
                 addr = ReadImmWord();
                 val = Read(addr);
-                SetNZ((byte)(A & val));
+                SetNZ((byte)(A - val));
                 Write(addr, (byte)(val & ~A));
                 return 6;
 
             // Returns
             case 0x6f: // RET
                 SP++;
-                addr = ReadWord(0x100 + SP);
+                addr = Read(0x100 + SP);
                 SP++;
+                addr |= Read(0x100 + SP) << 8;
                 PC = (ushort)addr;
                 return 5;
             case 0x7f: // RETI
-                Status |= StatusWord.Interrupt;
                 SP++;
-                addr = ReadWord(0x100 + SP);
+                Status = (StatusWord)Read(0x100 + SP);
                 SP++;
+                addr = Read(0x100 + SP);
+                SP++;
+                addr |= Read(0x100 + SP) << 8;
                 PC = (ushort)addr;
-                return 5;
+                return 6;
 
             // Word instructions
             case 0x1a: //DECW
                 addr = DirectPageAddress(Read(PC++));
-                valw = (short)(ReadWord(addr) - 1);
-                WriteWord(addr, SetNZ(valw));
+                valw = (short)(ReadWordNoCarry(addr) - 1);
+                WriteWordNoCarry(addr, SetNZ(valw));
                 return 6;
             case 0x3a: //INCW
                 addr = DirectPageAddress(Read(PC++));
-                valw = (short)(ReadWord(addr) + 1);
-                WriteWord(addr, SetNZ(valw));
+                valw = (short)(ReadWordNoCarry(addr) + 1);
+                WriteWordNoCarry(addr, SetNZ(valw));
                 return 6;
             case 0x5a: //CMPW YA, dp
                 //TODO: how does this actually work!?
                 throw new NotImplementedException();
             case 0x7a: // ADDW YA, dp
                 Carry = false;
-                valw = ReadWord(DirectPageAddress(Read(PC++)));
+                valw = ReadWordNoCarry(DirectPageAddress(Read(PC++)));
                 A = AdcOperation(A, (byte)valw);
                 Y = AdcOperation(Y, (byte)(valw >> 8));
-                SetNZ((Y << 8 | A));
+                SetNZ((short)((Y << 8) | A));
                 return 5;
             case 0x9a: // SUBW YA, dp
                 Carry = true;
-                valw = ReadWord(DirectPageAddress(Read(PC++)));
+                valw = ReadWordNoCarry(DirectPageAddress(Read(PC++)));
                 A = SbcOperation(A, (byte)valw);
                 Y = SbcOperation(Y, (byte)(valw >> 8));
-                SetNZ((Y << 8 | A));
+                SetNZ((short)((Y << 8) | A));
                 return 5;
             case 0xcf: // MUL YA
                 valw = (short)(Y * A); //TODO: is this signed or unsigned?
@@ -629,26 +642,17 @@ internal sealed class Spc
                 Y = SetNZ((byte)(valw >> 8));
                 return 9;
             case 0x9e: // DIV YA, X
-                valw = (short)((Y << 8) | A);
-                int nA, nY;
-                if (X != 0)
-                    (nA, nY) = int.DivRem(valw, X);
-                else
-                    (nA, nY) = (0x1ff, 0);
-                A = SetNZ((byte)nA);
-                Y = (byte)nY;
-                Overflow = (nA & 0x100) != 0;
-                // TODO: How is H set?!?
+                DivOperation();
                 return 12;
             case 0xba: // MOVW YA, dp
-                valw = SetNZ(ReadWord(DirectPageAddress(Read(PC++))));
+                valw = SetNZ(ReadWordNoCarry(DirectPageAddress(Read(PC++))));
                 A = (byte)valw;
-                Y = (byte)(valw << 8);
+                Y = (byte)(valw >> 8);
                 return 5;
             case 0xda: // MOVW dp, YA
                 valw = (short)((Y << 8) | (A));
-                WriteWord(DirectPageAddress(Read(PC++)), valw);
-                return 4;
+                WriteWordNoCarry(DirectPageAddress(Read(PC++)), valw);
+                return 5;
 
             //PSW operations
             case 0x20: //CLRP
@@ -665,10 +669,10 @@ internal sealed class Spc
                 return 2;
             case 0xa0: // EI
                 Status |= StatusWord.Interrupt;
-                return 2;
+                return 3;
             case 0xc0: // DI
                 Status &= ~StatusWord.Interrupt;
-                return 2;
+                return 3;
             case 0xe0: // CLRV
                 Status &= ~(StatusWord.HalfCarry | StatusWord.Overflow);
                 return 2;
@@ -712,12 +716,12 @@ internal sealed class Spc
                 Write(DirectPageAddress(X), A);
                 return 4;
             case 0xc7: // [dp + X], A
-                addr = ReadWord(DirectPageAddress((byte)(Read(PC++) + X)));
+                addr = ReadWordNoCarry(DirectPageAddress((byte)(Read(PC++) + X)));
                 Write(addr, A);
                 return 7;
-            case 0xc9: // !imm16, A
+            case 0xc9: // !imm16, X
                 addr = ReadImmWord();
-                Write(addr, A);
+                Write(addr, X);
                 return 5;
             case 0xcb: // dp, Y
                 Write(DirectPageAddress(Read(PC++)), Y);
@@ -738,7 +742,7 @@ internal sealed class Spc
                 Write(addr, A);
                 return 6;
             case 0xd7: // [dp] + Y, A
-                addr = ReadWord(DirectPageAddress(Read(PC++))) + Y;
+                addr = ReadWordNoCarry(DirectPageAddress(Read(PC++))) + Y;
                 Write(addr, A);
                 return 7;
             case 0xd8: // dp, X
@@ -767,7 +771,7 @@ internal sealed class Spc
                 A = SetNZ(Read(DirectPageAddress(X)));
                 return 3;
             case 0xe7: // A, [dp+X]
-                addr = ReadWord(DirectPageAddress((byte)(Read(PC++) + X)));
+                addr = ReadWordNoCarry(DirectPageAddress((byte)(Read(PC++) + X)));
                 A = SetNZ(Read(addr));
                 return 6;
             case 0xe9: // X, !imm16
@@ -795,7 +799,7 @@ internal sealed class Spc
                 A = SetNZ(Read(addr));
                 return 5;
             case 0xf7: // A, [dp] + Y
-                addr = ReadWord(DirectPageAddress(Read(PC++)));
+                addr = ReadWordNoCarry(DirectPageAddress(Read(PC++)));
                 A = SetNZ(Read(addr + Y));
                 return 6;
             case 0xf8: // X, dp
@@ -857,8 +861,8 @@ internal sealed class Spc
             // TCALL x
             case var _ when (instr & 0x0f) == 0x01:
             {
-                addr = 0xffc0 + 2 * (instr >> 4);
-                Call(ReadWord(addr));
+                addr = 0xffde - 2 * (instr >> 4);
+                Call(ReadWordNoCarry(addr));
                 return 8;
             }
 
@@ -891,7 +895,7 @@ internal sealed class Spc
                     case 0x07: // A, [dp + X]
                         op1 = Read(PC++);
                         var indirectAddressX = DirectPageAddress((byte)(op1 + X));
-                        addr = ReadWord(indirectAddressX);
+                        addr = ReadWordNoCarry(indirectAddressX);
                         rhs = Read(addr);
                         break;
                     case 0x08: // A, #imm8
@@ -913,7 +917,7 @@ internal sealed class Spc
                     case 0x17: // A, [dp] + Y
                         op1 = Read(PC++);
                         var indirectAddress = DirectPageAddress(op1);
-                        addr = ReadWord(indirectAddress);
+                        addr = ReadWordNoCarry(indirectAddress);
                         rhs = Read(addr + Y); // TODO: does this addition have carry?
                         break;
 
@@ -1000,8 +1004,32 @@ internal sealed class Spc
                 };
             }
             default:
-                throw new NotImplementedException();
+                throw new NotImplementedException($"Instruction 0x{instr:X2} not supported");
         }
+    }
+
+    private void DivOperation()
+    {
+        var a = (uint)((Y << 8) | A);
+        var b = (uint)(X << 9);
+        for (var i = 0; i < 9; i++)
+        {
+            if ((a & 0x1_0000) != 0)
+                a = ((a << 1) | 1) & 0x1ffff;
+            else
+                a <<= 1;
+
+            if (a >= b)
+                a ^= 1;
+
+            if ((a & 1) != 0)
+                a = (a - b) & 0x1ffff;
+        }
+
+        HalfCarry = (Y & 0x0f) >= (X & 0x0f);
+        Overflow = (a & 0x100) != 0;
+        A = SetNZ((byte)a);
+        Y = (byte)(a >> 9);
     }
 
     private bool Read1Bit(ushort bitAddr)
@@ -1027,24 +1055,25 @@ internal sealed class Spc
 
     private byte SbcOperation(byte lhs, byte rhs)
     {
-        var result = SetNZ((byte)(lhs - rhs - (Carry ? 0 : 1)));
+        var resultBig = lhs - rhs - (Carry ? 0 : 1);
+        var result = SetNZ((byte)resultBig);
         Overflow = ((lhs & 0x80) == 0 && (rhs & 0x80) != 0 && (result & 0x80) != 0) ||
                    ((lhs & 0x80) != 0 && (rhs & 0x80) == 0 && (result & 0x80) == 0);
         HalfCarry = (((lhs) ^ (rhs)) & 0x10) ==
                     (result & 0x10); // If the 1st bit of the upper nibble of the result isnt just lhs xor rhs, then a half-carry has happened.
-        // TODO: check if this behavior is correct for SBC! Carry flag with SBC is confusing!
-        Carry = !(result > lhs);
+        Carry = !(resultBig < 0);
         return result;
     }
 
     private byte AdcOperation(byte lhs, byte rhs)
     {
-        var result = SetNZ((byte)(lhs + rhs + (Carry ? 1 : 0)));
+        var resultBig = lhs + rhs + (Carry ? 1 : 0);
+        var result = SetNZ((byte)resultBig);
         Overflow = ((lhs & 0x80) == 0 && (rhs & 0x80) == 0 && (result & 0x80) != 0) ||
                    ((lhs & 0x80) != 0 && (rhs & 0x80) != 0 && (result & 0x80) == 0);
-        HalfCarry = ((lhs ^ (rhs)) & 0x10) !=
+        HalfCarry = ((lhs ^ rhs) & 0x10) !=
                     (result & 0x10); // If the 1st bit of the upper nibble of the result isnt just lhs xor rhs, then a half-carry has happened.
-        Carry = result < lhs;
+        Carry = resultBig > 0xff;
         return result;
     }
 
@@ -1057,8 +1086,9 @@ internal sealed class Spc
 
     private void Call(int v)
     {
+        Write(0x100 + SP, (byte)(PC >> 8));
         SP--;
-        WriteWord(0x100 + SP, PC);
+        Write(0x100 + SP, (byte)(PC));
         SP--;
         PC = (ushort)v;
     }
@@ -1097,11 +1127,11 @@ internal sealed class Spc
         return val;
     }
 
-    private short SetNZ(int val)
+    private short SetNZ(short val)
     {
         Zero = val == 0;
         Negative = val < 0;
-        return (short)val;
+        return val;
     }
 
     private int ReadImmWord()
@@ -1111,16 +1141,23 @@ internal sealed class Spc
         return (upper << 8) | lower;
     }
 
-    private short ReadWord(int address)
+    private short ReadWordNoCarry(int address)
+    {
+        var lower = Read(address);
+        var upper = Read((address & 0xff00) | (byte)(address + 1));
+        return (short)((upper << 8) | lower);
+    }
+
+    private short ReadWordCarry(int address)
     {
         var lower = Read(address);
         var upper = Read(address + 1);
         return (short)((upper << 8) | lower);
     }
-
-    private void WriteWord(int address, int word)
+    
+    private void WriteWordNoCarry(int address, int word)
     {
         Write(address, (byte)word);
-        Write(address + 1, (byte)(word >> 8));
+        Write((address & 0xff00) | (byte)(address + 1), (byte)(word >> 8));
     }
 }
