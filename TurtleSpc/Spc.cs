@@ -227,7 +227,8 @@ public sealed class Spc
 
         if ((Control & 0b100) != 0)
         {
-            if (_timer2Counter++ == Timer2Div)
+            _timer2Counter++;
+            if (_timer2Counter == Timer2Div)
             {
                 Timer2Out = (byte)((Timer2Out + 1) & 0x0f);
                 _timer2Counter = 0;
@@ -240,7 +241,8 @@ public sealed class Spc
 
             if ((Control & 0b001) != 0)
             {
-                if (_timer0Counter++ == Timer0Div)
+                _timer0Counter++;
+                if (_timer0Counter == Timer0Div)
                 {
                     Timer0Out = (byte)((Timer0Out + 1) & 0x0f);
                     _timer0Counter = 0;
@@ -249,7 +251,8 @@ public sealed class Spc
 
             if ((Control & 0b010) != 0)
             {
-                if (_timer1Counter++ == Timer1Div)
+                _timer1Counter++;
+                if (_timer1Counter == Timer1Div)
                 {
                     Timer1Out = (byte)((Timer1Out + 1) & 0x0f);
                     _timer1Counter = 0;
