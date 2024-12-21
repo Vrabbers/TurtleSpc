@@ -1,17 +1,20 @@
-﻿using System.Runtime.CompilerServices;
+﻿using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using TurtleSpc;
 using static SDL3.SDL;
 
-SDL_SetAppMetadata("asdf", "1.0", "br.why.asdf");
+SDL_SetAppMetadata("TurtleSpc", "1.0", "io.github.vrabbers.turtlespc");
 
 if (!SDL_Init(SDL_InitFlags.SDL_INIT_AUDIO | SDL_InitFlags.SDL_INIT_VIDEO))
 {
     throw new ApplicationException("Could not initialize SDL");
 }
 
-if (!SDL_CreateWindowAndRenderer("asdf, 640, 480", 640, 480, 0, out var windowPtr, out var rendererPtr))
+SDL_SetHint(SDL_HINT_RENDER_VSYNC, "1");
+
+if (!SDL_CreateWindowAndRenderer("TurtleSpc", 640, 480, 0, out var windowPtr, out var rendererPtr))
 {
     throw new ApplicationException("Could not initialize SDL window");
 }
@@ -32,10 +35,11 @@ if (stream == nint.Zero)
 
 SDL_ResumeAudioStreamDevice(stream);
 
-Span<short> buf = stackalloc short[1024];
+Span<short> buf = stackalloc short[6000];
 
 Spc? spc = null;
 var dialogOpen = false;
+ulong total = 0;
 while (true)
 {
     var lines = 0;
@@ -96,6 +100,7 @@ while (true)
                 for (var i = 0; i < buf.Length / 2; i++)
                 {
                     (buf[2 * i], buf[2 * i + 1]) = spc.OneSample();
+                    total++;
                 }
 
                 SDL_PutAudioStreamData(stream, (IntPtr)Unsafe.AsPointer(ref buf[0]), buf.Length * sizeof(short));
@@ -115,20 +120,21 @@ while (true)
         SDL_RenderPresent(rendererPtr);
         continue;
     }
-
-    WriteLine($"PC:{spc.PC:X4} A:{spc.A:X2} X:{spc.X:X2} Y:{spc.Y:X2} SP:{spc.SP:X2} PSW:{(byte)spc.Status:B8} Elapsed:{spc.Dsp._counter / 32000.0}s");
+#if DEBUG
+    WriteLine($"PC:{spc.PC:X4} A:{spc.A:X2} X:{spc.X:X2} Y:{spc.Y:X2} SP:{spc.SP:X2} PSW:{(byte)spc.Status:B8} Elapsed: {total/32} ms");
 
     WriteLine("DSP Registers: ");
     var strb = new StringBuilder();
-    for (int i = 0; i < 8; i++)
+    for (var i = 0; i < 8; i++)
     {
         strb.Clear();
         strb.Append($"{i << 4:X2}: ");
         for (int j = 0; j < 16; j++)
         {
-            strb.Append($"{spc.Dsp.Read((byte)((i << 4) | j)):X2} ");
+            strb.Append($"{spc.Dsp!.Read((byte)((i << 4) | j)):X2} ");
         }
         WriteLine(strb.ToString());
     }
+#endif
     SDL_RenderPresent(rendererPtr);
 }

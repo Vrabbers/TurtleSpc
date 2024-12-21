@@ -106,7 +106,7 @@ public sealed class Spc
     private const int T1OutAddress = 0xfe;
     private const int T2OutAddress = 0xff;
 
-    internal ulong _cpuTicksElapsed;
+    private ulong _cpuTicksElapsed;
 
     private int _timer0Counter;
     private int _timer1Counter;

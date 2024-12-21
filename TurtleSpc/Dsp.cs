@@ -131,7 +131,7 @@ public sealed class Dsp(byte[] aram)
     private readonly int[] _brrInterpolatePosition = new int[VoiceCount];
     private readonly byte[] _brrBufferIndex = new byte[VoiceCount];
 
-    internal ulong _counter;
+    private ulong _counter;
 
     private static bool GetBitProperty(byte value, int voice) => ((1 << voice) & value) != 0;
 
@@ -307,6 +307,7 @@ public sealed class Dsp(byte[] aram)
                 if (GetBitProperty(toggleKeyOn, voice))
                 {
                     _brrBlockIndex[voice] = 0;
+                    _brrBufferIndex[voice] = 0;
                     _brrBlockAddress[voice] = SampleNormalAddress(voice);
                     _envStates[voice] = EnvState.Attack;
                     _envVolumes[voice] = 0;
@@ -338,10 +339,16 @@ public sealed class Dsp(byte[] aram)
                 UpdateEnvelope(voice);
 
                 var pos = _brrInterpolatePosition[voice] >> 12;
-                var a = _brrDecodeBuffers[voice, pos];
-                var b = _brrDecodeBuffers[voice, (pos + 1) % 12];
-                var sample = a + ((b - a) * (pos & 0xfff)) / 0x1000;
-                sample = (sample * _envVolumes[voice]) / 0x800;
+                var dist = (_brrInterpolatePosition[voice] >> 4) & 0xff;
+                var a = (GaussianCoefficients[255 - dist] * _brrDecodeBuffers[voice, pos]) >> 11;
+                var b = (GaussianCoefficients[511 - dist] * _brrDecodeBuffers[voice, (pos + 1) % 12]) >> 11;
+                var c = (GaussianCoefficients[256 + dist] * _brrDecodeBuffers[voice, (pos + 2) % 12]) >> 11;
+                var d = (GaussianCoefficients[dist] * _brrDecodeBuffers[voice, (pos + 3) % 12]) >> 11;
+
+
+                var sample = int.Clamp((((a + b + c) >> 1) << 1) + d, -0x4000, 0x3fff);
+                sample *= _envVolumes[voice];
+                sample >>= 11;
                 WriteVoiceOutX((sbyte)(sample >> 8), voice);
                 samplesL[voice] = (short)((sample * VoiceVolLeft(voice)) / 0x80);
                 samplesR[voice] = (short)((sample * VoiceVolRight(voice)) / 0x80);
