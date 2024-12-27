@@ -352,10 +352,10 @@ public sealed class Dsp(byte[] aram)
 
                 var sample = int.Clamp(((((a + b + c) & 0x7fff) ^ 0x4000) - 0x4000) + d, -0x4000, 0x3fff);
                 sample *= _envVolumes[voice];
-                sample >>= 11;
+                sample >>= 10;
                 WriteVoiceOutX((sbyte)(sample >> 8), voice);
-                samplesL[voice] = (short)((sample * VoiceVolLeft(voice)) / 0x80);
-                samplesR[voice] = (short)((sample * VoiceVolRight(voice)) / 0x80);
+                samplesL[voice] = (short)((sample * VoiceVolLeft(voice)) >> 7);
+                samplesR[voice] = (short)((sample * VoiceVolRight(voice)) >> 7);
                 
                 var oldInterpolatePosition = _brrInterpolatePosition[voice];
                 var newInterpolatePosition = oldInterpolatePosition + VoicePitch(voice);
@@ -373,8 +373,10 @@ public sealed class Dsp(byte[] aram)
         if (!EchoDisable)
         {
             (firL, firR) = CalculateFirSample();
-            var enterFirL = (short)(_aram[(ushort)(EchoStartAddress + _echoIndex * 4)] | ((_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 1)]) << 8));
-            var enterFirR = (short)(_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 2)] | ((_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 3)]) << 8));
+            var enterFirL = (short)(_aram[(ushort)(EchoStartAddress + _echoIndex * 4)] |
+                                    ((_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 1)]) << 8));
+            var enterFirR = (short)(_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 2)] |
+                                    ((_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 3)]) << 8));
             EnterFir((short)(enterFirL >> 1), (short)(enterFirR >> 1));
         }
         var dacL = 0;
@@ -392,8 +394,8 @@ public sealed class Dsp(byte[] aram)
             }
         }
 
-        dacL = (short)((dacL * MainVolLeft) / 0x80);
-        dacR = (short)((dacR * MainVolRight) / 0x80);
+        dacL = (short)((dacL * MainVolLeft) >> 7);
+        dacR = (short)((dacR * MainVolRight) >> 7);
         dacL = short.CreateSaturating(dacL + ((firL * EchoVolLeft) >> 7));
         dacR = short.CreateSaturating(dacR + ((firR * EchoVolRight) >> 7));
         echoL = short.CreateSaturating(echoL + ((firL * EchoFeedback) >> 7));
