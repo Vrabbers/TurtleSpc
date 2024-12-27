@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.VisualBasic;
 
 namespace TurtleSpc;
 
@@ -133,6 +134,9 @@ public sealed class Dsp(byte[] aram)
 
     private ulong _counter;
 
+    private int _echoIndex;
+    private int _echoIndexMax;
+
     private static bool GetBitProperty(byte value, int voice) => ((1 << voice) & value) != 0;
 
     private static int BytePropertyAddress(int index, int voice) => (voice << 4) | index;
@@ -192,7 +196,7 @@ public sealed class Dsp(byte[] aram)
 
     private int EchoStartAddress => _regs[0x6d] << 8;
 
-    private int EchoDelay => _regs[0x7d];
+    private int EchoDelay => _regs[0x7d] & 0xf;
 
     private sbyte EchoFilterCoefficients(int index) => (sbyte) _regs[BytePropertyAddress(0x0f, index)];
 
@@ -346,7 +350,7 @@ public sealed class Dsp(byte[] aram)
                 var d = (GaussianCoefficients[dist] * _brrDecodeBuffers[voice, (pos + 3) % 12]) >> 11;
 
 
-                var sample = int.Clamp((((a + b + c) >> 1) << 1) + d, -0x4000, 0x3fff);
+                var sample = int.Clamp(((((a + b + c) & 0x7fff) ^ 0x4000) - 0x4000) + d, -0x4000, 0x3fff);
                 sample *= _envVolumes[voice];
                 sample >>= 11;
                 WriteVoiceOutX((sbyte)(sample >> 8), voice);
@@ -363,15 +367,85 @@ public sealed class Dsp(byte[] aram)
             }
             WriteVoiceEnvX((byte)(_envVolumes[voice] >> 4), voice);
         }
-        var l = 0;
-        var r = 0;
+
+        var firL = 0;
+        var firR = 0;
+        if (!EchoDisable)
+        {
+            (firL, firR) = CalculateFirSample();
+            var enterFirL = (short)(_aram[(ushort)(EchoStartAddress + _echoIndex * 4)] | ((_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 1)]) << 8));
+            var enterFirR = (short)(_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 2)] | ((_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 3)]) << 8));
+            EnterFir((short)(enterFirL >> 1), (short)(enterFirR >> 1));
+        }
+        var dacL = 0;
+        var dacR = 0;
+        var echoL = 0;
+        var echoR = 0;
         for (var i = 0; i < VoiceCount; i++)
         {
-            l += samplesL[i];
-            r += samplesR[i];
+            dacL = short.CreateSaturating(dacL + samplesL[i]);
+            dacR = short.CreateSaturating(dacR + samplesR[i]);
+            if (!EchoDisable)
+            {
+                echoL = short.CreateSaturating(echoL + samplesL[i]);
+                echoR = short.CreateSaturating(echoR + samplesR[i]);
+            }
         }
+
+        dacL = (short)((dacL * MainVolLeft) / 0x80);
+        dacR = (short)((dacR * MainVolRight) / 0x80);
+        dacL = short.CreateSaturating(dacL + ((firL * EchoVolLeft) >> 7));
+        dacR = short.CreateSaturating(dacR + ((firR * EchoVolRight) >> 7));
+        echoL = short.CreateSaturating(echoL + ((firL * EchoFeedback) >> 7));
+        echoR = short.CreateSaturating(echoR + ((firR * EchoFeedback) >> 7));
+        echoL &= ~1;
+        echoR &= ~1;
+
+        if (!EchoDisable)
+        {
+            _aram[(ushort)(EchoStartAddress + _echoIndex * 4)] = (byte)echoL;
+            _aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 1)] = (byte)(echoL >> 8);
+            _aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 2)] = (byte)echoR;
+            _aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 3)] = (byte)(echoR >> 8);
+            if (_echoIndex == 0)
+                _echoIndexMax = EchoDelay << 9;
+            _echoIndex++;
+            if (_echoIndex >= _echoIndexMax)
+                _echoIndex = 0;
+        }
+
         _counter++;
-        return (short.CreateSaturating(l), short.CreateSaturating(r));
+        if (!Mute)
+            return (short.CreateSaturating(dacL), short.CreateSaturating(dacR));
+        
+        return (0, 0);
+    }
+
+    private readonly (short FirL, short FirR)[] _firBuffer = new (short, short)[8];
+    private int _firBufferPos = 0;
+
+    private void EnterFir(short enterFirL, short enterFirR)
+    {
+        _firBuffer[_firBufferPos] = (enterFirL, enterFirR);
+        _firBufferPos++;
+        _firBufferPos &= 7;
+    }
+
+    private (short FirL, short FirR) CalculateFirSample()
+    {
+        short firL = 0;
+        short firR = 0;
+        for (var i = 0; i < 7; i++)
+        {
+            var (bufferL, bufferR) = _firBuffer[(_firBufferPos - i - 1) & 7];
+            firL += (short)((bufferL * EchoFilterCoefficients(i)) >> 6);
+            firR += (short)((bufferR * EchoFilterCoefficients(i)) >> 6);
+        }
+        firL = short.CreateSaturating(firL + (_firBuffer[_firBufferPos].FirL * EchoFilterCoefficients(7)) >> 6);
+        firR = short.CreateSaturating(firR + (_firBuffer[_firBufferPos].FirR * EchoFilterCoefficients(7)) >> 6);
+        firL &= ~1;
+        firR &= ~1;
+        return (firL, firR);
     }
 
     private void UpdateEnvelope(int voice)

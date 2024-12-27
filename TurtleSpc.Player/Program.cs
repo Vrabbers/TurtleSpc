@@ -35,7 +35,7 @@ if (stream == nint.Zero)
 
 SDL_ResumeAudioStreamDevice(stream);
 
-Span<short> buf = stackalloc short[6000];
+Span<short> buf = stackalloc short[2048];
 
 Spc? spc = null;
 var dialogOpen = false;
@@ -114,6 +114,12 @@ while (true)
 
     SDL_SetRenderDrawColor(rendererPtr, 255, 255, 255, 255);
     WriteLine("TurtleSpc");
+
+    for (var i = 0; i < buf.Length / 2; i++)
+    {
+        SDL_RenderPoint(rendererPtr, (i * 640) / (buf.Length / 2), 240 + (buf[2 * i] * 480) / short.MaxValue);
+        SDL_RenderPoint(rendererPtr, (i * 640) / (buf.Length / 2), 240 + (buf[2 * i + 1] * 480) / short.MaxValue);
+    }
 
     if (spc is null)
     {
