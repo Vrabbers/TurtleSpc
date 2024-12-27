@@ -368,40 +368,36 @@ public sealed class Dsp(byte[] aram)
             WriteVoiceEnvX((byte)(_envVolumes[voice] >> 4), voice);
         }
 
-        var firL = 0;
-        var firR = 0;
+        short firL = 0;
+        short firR = 0;
         if (!EchoDisable)
         {
-            (firL, firR) = CalculateFirSample();
             var enterFirL = (short)(_aram[(ushort)(EchoStartAddress + _echoIndex * 4)] |
                                     ((_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 1)]) << 8));
             var enterFirR = (short)(_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 2)] |
                                     ((_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 3)]) << 8));
             EnterFir((short)(enterFirL >> 1), (short)(enterFirR >> 1));
+            (firL, firR) = CalculateFirSample();
         }
-        var dacL = 0;
-        var dacR = 0;
-        var echoL = 0;
-        var echoR = 0;
+        short dacL = 0;
+        short dacR = 0;
         for (var i = 0; i < VoiceCount; i++)
         {
             dacL = short.CreateSaturating(dacL + samplesL[i]);
             dacR = short.CreateSaturating(dacR + samplesR[i]);
-            if (!EchoDisable)
-            {
-                echoL = short.CreateSaturating(echoL + samplesL[i]);
-                echoR = short.CreateSaturating(echoR + samplesR[i]);
-            }
         }
 
-        dacL = (short)((dacL * MainVolLeft) >> 7);
-        dacR = (short)((dacR * MainVolRight) >> 7);
-        dacL = short.CreateSaturating(dacL + ((firL * EchoVolLeft) >> 7));
-        dacR = short.CreateSaturating(dacR + ((firR * EchoVolRight) >> 7));
-        echoL = short.CreateSaturating(echoL + ((firL * EchoFeedback) >> 7));
-        echoR = short.CreateSaturating(echoR + ((firR * EchoFeedback) >> 7));
+        var echoL = short.CreateSaturating(dacL + ((firL * EchoFeedback) >> 7));
+        var echoR = short.CreateSaturating(dacR + ((firR * EchoFeedback) >> 7));
+        
         echoL &= ~1;
         echoR &= ~1;
+        
+        dacL = (short)((dacL * MainVolLeft) >> 7);
+        dacR = (short)((dacR * MainVolRight) >> 7);
+        
+        dacL = short.CreateSaturating(dacL + ((firL * EchoVolLeft) >> 7));
+        dacR = short.CreateSaturating(dacR + ((firR * EchoVolRight) >> 7));
 
         if (!EchoDisable)
         {
@@ -439,12 +435,12 @@ public sealed class Dsp(byte[] aram)
         short firR = 0;
         for (var i = 0; i < 7; i++)
         {
-            var (bufferL, bufferR) = _firBuffer[(_firBufferPos - i - 1) & 7];
+            var (bufferL, bufferR) = _firBuffer[(_firBufferPos - (7 - i)) & 7];
             firL += (short)((bufferL * EchoFilterCoefficients(i)) >> 6);
             firR += (short)((bufferR * EchoFilterCoefficients(i)) >> 6);
         }
-        firL = short.CreateSaturating(firL + (_firBuffer[_firBufferPos].FirL * EchoFilterCoefficients(7)) >> 6);
-        firR = short.CreateSaturating(firR + (_firBuffer[_firBufferPos].FirR * EchoFilterCoefficients(7)) >> 6);
+        firL = short.CreateSaturating(firL + ((_firBuffer[_firBufferPos].FirL * EchoFilterCoefficients(7)) >> 6));
+        firR = short.CreateSaturating(firR + ((_firBuffer[_firBufferPos].FirR * EchoFilterCoefficients(7)) >> 6));
         firL &= ~1;
         firR &= ~1;
         return (firL, firR);
