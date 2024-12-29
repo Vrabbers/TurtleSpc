@@ -62,6 +62,8 @@ public sealed class Spc
         return spc;
     }
     
+
+
     private bool Carry
     {
         get => Status.HasFlag(StatusWord.Carry);
@@ -128,7 +130,7 @@ public sealed class Spc
 
     private ref byte Timer2Out => ref Memory[T2OutAddress];
 
-    private int DirectPageAddress(byte offset) => (Status.HasFlag(StatusWord.DirectPage) ? 0x100 : 0x000) + offset;
+    private int DirectPageAddress(byte offset) => ((int)(Status & StatusWord.DirectPage) << 3) + offset;
 
     private void Write(int address, byte value)
     {
@@ -215,6 +217,10 @@ public sealed class Spc
         }
     }
 
+    private const int Timer0EnableMask = 0b001;
+    private const int Timer1EnableMask = 0b010;
+    private const int Timer2EnableMask = 0b100;
+
     private bool CheckTimers(int cycles)
     {
         var oldElapsed = _cpuTicksElapsed;
@@ -282,30 +288,42 @@ public sealed class Spc
             // Increment and decrement
             case 0x8b: // DEC dp
                 addr = DirectPageAddress(Read(PC++));
-                Write(addr, SetNZ((byte)(Read(addr) - 1)));
+                val = (byte)(Read(addr) - 1);
+                SetNZ(val);
+                Write(addr, val);
                 return 4;
             case 0x9b: // DEC dp + X
                 addr = DirectPageAddress((byte)(Read(PC++) + X));
-                Write(addr, SetNZ((byte)(Read(addr) - 1)));
+                val = (byte)(Read(addr) - 1);
+                SetNZ(val);
+                Write(addr, val);
                 return 5;
             case 0x8c: // DEC !imm16
                 addr = ReadImmWord();
-                Write(addr, SetNZ((byte)(Read(addr) - 1)));
+                val = (byte)(Read(addr) - 1);
+                SetNZ(val);
+                Write(addr, val);
                 return 5;
             case 0x9c: // DEC A
                 SetNZ(--A);
                 return 2;
             case 0xab: // INC dp
                 addr = DirectPageAddress(Read(PC++));
-                Write(addr, SetNZ((byte)(Read(addr) + 1)));
+                val = (byte)(Read(addr) + 1);
+                SetNZ(val);
+                Write(addr, val);
                 return 4;
             case 0xbb: // INC dp + X
                 addr = DirectPageAddress((byte)(Read(PC++) + X));
-                Write(addr, SetNZ((byte)(Read(addr) + 1)));
+                val = (byte)(Read(addr) + 1);
+                SetNZ(val);
+                Write(addr, val);
                 return 5;
             case 0xac: // INC !imm16
                 addr = ReadImmWord();
-                Write(addr, SetNZ((byte)(Read(addr) + 1)));
+                val = (byte)(Read(addr) + 1);
+                SetNZ(val);
+                Write(addr, val);
                 return 5;
             case 0xbc: // INC A
                 SetNZ(++A);
@@ -325,33 +343,44 @@ public sealed class Spc
 
             // Register to register MOVs
             case 0x5d: // MOV X, A
-                X = SetNZ(A);
+                SetNZ(A);
+                X = A;
                 return 2;
             case 0x7d: // MOV A, X
-                A = SetNZ(X);
+                SetNZ(X);
+                A = X;
                 return 2;
             case 0x9d: // MOV X, SP
-                X = SetNZ(SP);
+                SetNZ(SP);
+                X = SP;
                 return 2;
             case 0xbd: // MOV SP, X
                 SP = X;
                 return 2;
             case 0xdd: // MOV A, Y
-                A = SetNZ(Y);
+                SetNZ(Y);
+                A = Y;
                 return 2;
             case 0xfd: // MOV Y, A
-                Y = SetNZ(A);
+                SetNZ(A);
+                Y = A;
                 return 2;
 
             // Immediate value loads
             case 0xe8: // MOV A, #imm8
-                A = SetNZ(Read(PC++));
+                val = Read(PC++);
+                SetNZ(val);
+                A = val;
                 return 2;
             case 0x8d: // MOV Y
-                Y = SetNZ(Read(PC++));
+                val = Read(PC++);
+                SetNZ(val);
+                Y = val;
                 return 2;
             case 0xcd: // MOV X
-                X = SetNZ(Read(PC++));
+                val = Read(PC++);
+                SetNZ(val);
+                X = val;
                 return 2;
 
             // Stack instructions
@@ -450,7 +479,9 @@ public sealed class Spc
                 A = RotateRight(A);
                 return 2;
             case 0x9f: // XCN A
-                A = SetNZ((byte)((A >> 4) | (A << 4)));
+                val = (byte)((A >> 4) | (A << 4));
+                SetNZ(val);
+                A = val;
                 return 5;
 
             // Branches
@@ -615,12 +646,14 @@ public sealed class Spc
             case 0x1a: //DECW
                 addr = DirectPageAddress(Read(PC++));
                 valw = (short)(ReadWordNoCarry(addr) - 1);
-                WriteWordNoCarry(addr, SetNZ(valw));
+                SetNZ(valw);
+                WriteWordNoCarry(addr, valw);
                 return 6;
             case 0x3a: //INCW
                 addr = DirectPageAddress(Read(PC++));
                 valw = (short)(ReadWordNoCarry(addr) + 1);
-                WriteWordNoCarry(addr, SetNZ(valw));
+                SetNZ(valw);
+                WriteWordNoCarry(addr, valw);
                 return 6;
             case 0x5a: //CMPW YA, dp
                 //TODO: how does this actually work!?
@@ -642,13 +675,16 @@ public sealed class Spc
             case 0xcf: // MUL YA
                 valw = (short)(Y * A); //TODO: is this signed or unsigned?
                 A = (byte)valw;
-                Y = SetNZ((byte)(valw >> 8));
+                val = (byte)(valw >> 8);
+                SetNZ(val);
+                Y = val;
                 return 9;
             case 0x9e: // DIV YA, X
                 DivOperation();
                 return 12;
             case 0xba: // MOVW YA, dp
-                valw = SetNZ(ReadWordNoCarry(DirectPageAddress(Read(PC++))));
+                valw = ReadWordNoCarry(DirectPageAddress(Read(PC++)));
+                SetNZ(valw);
                 A = (byte)valw;
                 Y = (byte)(valw >> 8);
                 return 5;
@@ -765,54 +801,84 @@ public sealed class Spc
 
             // Memory to register MOVs
             case 0xe4: //A, dp
-                A = SetNZ(Read(DirectPageAddress(Read(PC++))));
+                val = Read(DirectPageAddress(Read(PC++)));
+                SetNZ(val);
+                A = val;
                 return 3;
             case 0xe5: //A, !imm16
-                A = SetNZ(Read(ReadImmWord()));
+                val = Read(ReadImmWord());
+                SetNZ(val);
+                A = val;
                 return 4;
             case 0xe6: // A, (X)
-                A = SetNZ(Read(DirectPageAddress(X)));
+                val = Read(DirectPageAddress(X));
+                SetNZ(val);
+                A = val;
                 return 3;
             case 0xe7: // A, [dp+X]
                 addr = ReadWordNoCarry(DirectPageAddress((byte)(Read(PC++) + X)));
-                A = SetNZ(Read(addr));
+                val = Read(addr);
+                SetNZ(val);
+                A = val;
                 return 6;
             case 0xe9: // X, !imm16
-                X = SetNZ(Read(ReadImmWord()));
+                val = Read(ReadImmWord());
+                SetNZ(val);
+                X = val;
                 return 4;
             case 0xeb: // Y, dp
-                Y = SetNZ(Read(DirectPageAddress(Read(PC++))));
+                val = Read(DirectPageAddress(Read(PC++)));
+                SetNZ(val);
+                Y = val;
                 return 3;
             case 0xec: // Y, !imm16
-                Y = SetNZ(Read(ReadImmWord()));
+                val = Read(ReadImmWord());
+                SetNZ(val);
+                Y = val;
                 return 4;
             case 0xbf: // A, (X)+
-                A = SetNZ(Read(DirectPageAddress(X++)));
+                val = Read(DirectPageAddress(X++));
+                SetNZ(val);
+                A = val;
                 return 4;
             case 0xf4: // A, dp+X
                 addr = DirectPageAddress((byte)(Read(PC++) + X));
-                A = SetNZ(Read(addr));
+                val = Read(addr);
+                SetNZ(val);
+                A = val;
                 return 4;
             case 0xf5: // A, !imm16 + X
                 addr = ReadImmWord() + X;
-                A = SetNZ(Read(addr));
+                val = Read(addr);
+                SetNZ(val);
+                A = val;
                 return 5;
             case 0xf6: // A, !imm16 + Y
                 addr = ReadImmWord() + Y;
-                A = SetNZ(Read(addr));
+                val = Read(addr);
+                SetNZ(val);
+                A = val;
                 return 5;
             case 0xf7: // A, [dp] + Y
                 addr = ReadWordNoCarry(DirectPageAddress(Read(PC++)));
-                A = SetNZ(Read(addr + Y));
+                val = Read(addr + Y);
+                SetNZ(val);
+                A = val;
                 return 6;
             case 0xf8: // X, dp
-                X = SetNZ(Read(DirectPageAddress(Read(PC++))));
+                val = Read(DirectPageAddress(Read(PC++)));
+                SetNZ(val);
+                X = val;
                 return 3;
             case 0xf9: // X, dp + Y
-                X = SetNZ(Read(DirectPageAddress((byte)(Read(PC++) + Y))));
+                val = Read(DirectPageAddress((byte)(Read(PC++) + Y)));
+                SetNZ(val);
+                X = val;
                 return 4;
             case 0xfb: // Y, dp + X
-                Y = SetNZ(Read(DirectPageAddress((byte)(Read(PC++) + X))));
+                val = Read(DirectPageAddress((byte)(Read(PC++) + X)));
+                SetNZ(val);
+                Y = val;
                 return 4;
             case 0xfa: // dp dest, dp src
                 var src = DirectPageAddress(Read(PC++));
@@ -949,9 +1015,9 @@ public sealed class Spc
 
                 var result = op switch
                 {
-                    0 => SetNZ((byte)(lhs | rhs)),
-                    1 => SetNZ((byte)(lhs & rhs)),
-                    2 => SetNZ((byte)(lhs ^ rhs)),
+                    0 => OrOperation(lhs, rhs),
+                    1 => AndOperation(lhs, rhs),
+                    2 => XorOperation(lhs, rhs),
                     3 => CmpOperation(lhs, rhs),
                     4 => AdcOperation(lhs, rhs),
                     5 => SbcOperation(lhs, rhs),
@@ -1011,6 +1077,27 @@ public sealed class Spc
         }
     }
 
+    private byte OrOperation(byte lhs, byte rhs)
+    {
+        var val = (byte)(lhs | rhs);
+        SetNZ(val);
+        return val;
+    }
+
+    private byte AndOperation(byte lhs, byte rhs)
+    {
+        var val = (byte)(lhs & rhs);
+        SetNZ(val);
+        return val;
+    }
+
+    private byte XorOperation(byte lhs, byte rhs)
+    {
+        var val = (byte)(lhs ^ rhs);
+        SetNZ(val);
+        return val;
+    }
+
     private void DivOperation()
     {
         var a = (uint)((Y << 8) | A);
@@ -1031,7 +1118,8 @@ public sealed class Spc
 
         HalfCarry = (Y & 0x0f) >= (X & 0x0f);
         Overflow = (a & 0x100) != 0;
-        A = SetNZ((byte)a);
+        A = (byte)a;
+        SetNZ((byte)a);
         Y = (byte)(a >> 9);
     }
 
@@ -1059,7 +1147,8 @@ public sealed class Spc
     private byte SbcOperation(byte lhs, byte rhs)
     {
         var resultBig = lhs - rhs - (Carry ? 0 : 1);
-        var result = SetNZ((byte)resultBig);
+        var result = (byte)resultBig;
+        SetNZ(result);
         Overflow = ((lhs & 0x80) == 0 && (rhs & 0x80) != 0 && (result & 0x80) != 0) ||
                    ((lhs & 0x80) != 0 && (rhs & 0x80) == 0 && (result & 0x80) == 0);
         HalfCarry = (((lhs) ^ (rhs)) & 0x10) ==
@@ -1071,7 +1160,8 @@ public sealed class Spc
     private byte AdcOperation(byte lhs, byte rhs)
     {
         var resultBig = lhs + rhs + (Carry ? 1 : 0);
-        var result = SetNZ((byte)resultBig);
+        var result = (byte)resultBig;
+        SetNZ(result);
         Overflow = ((lhs & 0x80) == 0 && (rhs & 0x80) == 0 && (result & 0x80) != 0) ||
                    ((lhs & 0x80) != 0 && (rhs & 0x80) != 0 && (result & 0x80) == 0);
         HalfCarry = ((lhs ^ rhs) & 0x10) !=
@@ -1082,7 +1172,8 @@ public sealed class Spc
 
     private byte CmpOperation(byte lhs, byte rhs)
     {
-        var result = SetNZ((byte)(lhs - rhs)); // no carry
+        var result = (byte)(lhs - rhs); // no carry
+        SetNZ(result);
         Carry = !(result > lhs);
         return result;
     }
@@ -1099,42 +1190,46 @@ public sealed class Spc
     private byte ArithmeticShiftLeft(byte value)
     {
         Carry = value >= 0x80;
-        return SetNZ((byte)(value << 1));
+        var newVal = (byte)(value << 1);
+        SetNZ(newVal);
+        return newVal;
     }
 
     private byte LogicalShiftRight(byte value)
     {
         Carry = (value & 1) == 1;
-        return SetNZ((byte)(value >> 1));
+        var newVal = (byte)(value >> 1);
+        SetNZ(newVal);
+        return newVal;
     }
 
     private byte RotateLeft(byte value)
     {
-        var newVal = SetNZ((byte)((value << 1) | (Carry ? 1 : 0)));
+        var newVal = (byte)((value << 1) | (Carry ? 1 : 0));
+        SetNZ(newVal);
         Carry = value >= 0x80;
         return newVal;
     }
 
     private byte RotateRight(byte value)
     {
-        var newVal = SetNZ((byte)((value >> 1) | (Carry ? 0x80 : 0)));
+        var newVal = (byte)((value >> 1) | (Carry ? 0x80 : 0));
+        SetNZ(newVal);
         Carry = (value & 1) == 1;
         return newVal;
     }
 
     // Sets N and Z flags appropriately, passing the value through.
-    private byte SetNZ(byte val)
+    private void SetNZ(byte val)
     {
         Zero = val == 0;
         Negative = val >= 0x80;
-        return val;
     }
 
-    private short SetNZ(short val)
+    private void SetNZ(short val)
     {
         Zero = val == 0;
         Negative = val < 0;
-        return val;
     }
 
     private int ReadImmWord()

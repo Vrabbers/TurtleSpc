@@ -1,8 +1,6 @@
 using System.Diagnostics;
-using Microsoft.VisualBasic;
 
 namespace TurtleSpc;
-
 public enum EnvState
 {
     Release,
@@ -10,6 +8,7 @@ public enum EnvState
     Decay,
     Sustain,
 }
+
 public sealed class Dsp(byte[] aram)
 {
     private static readonly ulong[] TimerDividers =
@@ -137,7 +136,7 @@ public sealed class Dsp(byte[] aram)
     private int _echoIndex;
     private int _echoIndexMax;
 
-    private static bool GetBitProperty(byte value, int voice) => ((1 << voice) & value) != 0;
+    private static bool TestBitFlag(byte value, int voice) => ((1 << voice) & value) != 0;
 
     private static int BytePropertyAddress(int index, int voice) => (voice << 4) | index;
 
@@ -148,7 +147,7 @@ public sealed class Dsp(byte[] aram)
 
     private byte VoiceSourceNumber(int voice) => _regs[BytePropertyAddress(0x4, voice)];
 
-    private bool VoiceAdsrEnable(int voice) => GetBitProperty(_regs[BytePropertyAddress(0x5, voice)], 7);
+    private bool VoiceAdsrEnable(int voice) => TestBitFlag(_regs[BytePropertyAddress(0x5, voice)], 7);
     private int VoiceAdsrDecayRate(int voice) => (_regs[BytePropertyAddress(0x5, voice)] >> 4) & 0x07;
     private int VoiceAdsrAttackRate(int voice) => _regs[BytePropertyAddress(0x5, voice)] & 0x0f;
     private int VoiceAdsrSustainLevel(int voice) => (_regs[BytePropertyAddress(0x6, voice)] >> 5) & 0x07;
@@ -166,7 +165,6 @@ public sealed class Dsp(byte[] aram)
         _regs[BytePropertyAddress(0x9, voice)] = (byte)value;
     }
 
-
     private sbyte MainVolLeft => (sbyte)_regs[0x0c];
     private sbyte MainVolRight => (sbyte)_regs[0x1c];
     private sbyte EchoVolLeft => (sbyte)_regs[0x2c];
@@ -174,23 +172,23 @@ public sealed class Dsp(byte[] aram)
     private byte KeyOn => _regs[0x4c];
 
     private byte KeyOff => _regs[0x5c];
-    private bool Reset => GetBitProperty(_regs[0x6c], 7);
-    private bool Mute => GetBitProperty(_regs[0x6c], 6);
-    private bool EchoDisable => GetBitProperty(_regs[0x6c], 5);
+    private bool Reset => TestBitFlag(_regs[0x6c], 7);
+    private bool Mute => TestBitFlag(_regs[0x6c], 6);
+    private bool EchoDisable => TestBitFlag(_regs[0x6c], 5);
     private int NoiseFrequency => _regs[0x6c] & 0x1f;
-
-
+    
     private void WriteVoiceEndX(bool end, int voice)
     {
         var mask = 1 << voice;
         _regs[VoiceEndXAddress] = (byte)(end ? (_regs[EndXAddress] | mask) : (_regs[EndXAddress] & ~mask ));
     }
+
     private sbyte EchoFeedback => (sbyte)_regs[0x0d];
 
-    private bool VoicePitchModulationOn(int voice) => GetBitProperty(_regs[0x2d], voice);
-    private bool VoiceNoiseOn(int voice) => GetBitProperty(_regs[0x3d], voice);
+    private bool VoicePitchModulationOn(int voice) => TestBitFlag(_regs[0x2d], voice);
+    private bool VoiceNoiseOn(int voice) => TestBitFlag(_regs[0x3d], voice);
 
-    private bool VoiceEchoOn(int voice) => GetBitProperty(_regs[0x4d], voice);
+    private bool VoiceEchoOn(int voice) => TestBitFlag(_regs[0x4d], voice);
 
     private int DirectoryAddress => _regs[0x5d] << 8;
 
@@ -200,7 +198,7 @@ public sealed class Dsp(byte[] aram)
 
     private sbyte EchoFilterCoefficients(int index) => (sbyte) _regs[BytePropertyAddress(0x0f, index)];
 
-    private ushort SampleNormalAddress(int voice)
+    private ushort SampleStartAddress(int voice)
     {
         var basePtr = DirectoryAddress + VoiceSourceNumber(voice) * 4;
         return (ushort)(_aram[basePtr] | (_aram[basePtr + 1] << 8));
@@ -212,7 +210,7 @@ public sealed class Dsp(byte[] aram)
         return (ushort)(_aram[basePtr] | (_aram[basePtr + 1] << 8));
     }
 
-    private bool ShouldForThisSample(int rate)
+    private bool ShouldDoAtRate(int rate)
     {
         if (rate == 0)
             return false;
@@ -223,18 +221,14 @@ public sealed class Dsp(byte[] aram)
     (
         header >> 4,
         (header >> 2) & 0x03,
-        ((header) & 0x02) != 0,
+        (header & 0x02) != 0,
         (header & 0x01) != 0
     );
-
+    
     private void DecodeBrrBlock(int voice)
     {
-        static short SignExtendLower4Bits(byte v)
-        {
-            if ((v & 0b0000_1000) != 0)
-                return (short)((v & 0x0f) | (0xfff0)); 
-            return (short)(v & 0x0f);
-        }
+        static short SignExtendLeast4Bits(byte v) => (short)((sbyte)(v << 4) >> 4);
+        
         var baseBlockAddress = _brrBlockAddress[voice];
         var (shift, filter, loop, end) = BrrHeaderDecode(_aram[baseBlockAddress]);
         if (end)
@@ -251,9 +245,9 @@ public sealed class Dsp(byte[] aram)
         var baseDataAddress = (ushort)(baseBlockAddress + 1 + blockIndex / 2);
 
         Span<short> vals = stackalloc short[4];
-        vals[3] = SignExtendLower4Bits(_aram[(ushort)(baseDataAddress + 1)]);
+        vals[3] = SignExtendLeast4Bits(_aram[(ushort)(baseDataAddress + 1)]);
         vals[2] = (short)(((sbyte)_aram[(ushort)(baseDataAddress + 1)]) >> 4);
-        vals[1] = SignExtendLower4Bits(_aram[baseDataAddress]);
+        vals[1] = SignExtendLeast4Bits(_aram[baseDataAddress]);
         vals[0] = (short)(((sbyte)_aram[baseDataAddress]) >> 4);
 
         var bufferIndex = _brrBufferIndex[voice];
@@ -279,8 +273,6 @@ public sealed class Dsp(byte[] aram)
             _brrDecodeBuffers[voice, bufferIndex] = (short)(sample & 0xfffe);
             bufferIndex++;
         }
-        Debug.Assert(bufferIndex <= 12);
-        Debug.Assert(blockIndex < 16);
 
         _brrBufferIndex[voice] = (byte)(bufferIndex == 12 ? 0 : bufferIndex);
         blockIndex += 4;
@@ -297,40 +289,26 @@ public sealed class Dsp(byte[] aram)
             _brrBlockIndex[voice] = blockIndex;
         }
     }
-
+    
     public (short L, short R) OneSample()
     {
         Span<short> samplesL = stackalloc short[VoiceCount];
         Span<short> samplesR = stackalloc short[VoiceCount];
-        var toggleKeyOn = (byte)(~_lastKeyOn & KeyOn);
-        var pollKeyOn = _counter % 2 == 0;
+
+        if (ShouldDoAtRate(NoiseFrequency))
+            _noiseSample = (ushort)(((_noiseSample << 1) | ((_noiseSample >> 13) ^ (_noiseSample >> 14)) & 1) & 0x7fff);
+        
+        if (_counter % 2 == 0)
+        {
+            var toggleKeyOn = (byte)(~_lastKeyOn & KeyOn);
+            _lastKeyOn = KeyOn;
+            
+            for (var voice = 0; voice < VoiceCount; voice++) 
+                PollKeyOnAndKeyOff(toggleKeyOn, voice);
+        }
+        
         for (var voice = 0; voice < VoiceCount; voice++)
         {
-            if (pollKeyOn)
-            {
-                if (GetBitProperty(toggleKeyOn, voice))
-                {
-                    _brrBlockIndex[voice] = 0;
-                    _brrBufferIndex[voice] = 0;
-                    _brrBlockAddress[voice] = SampleNormalAddress(voice);
-                    _envStates[voice] = EnvState.Attack;
-                    _envVolumes[voice] = 0;
-                    _brrInterpolatePosition[voice] = -5;
-                    DecodeBrrBlock(voice);
-                    DecodeBrrBlock(voice);
-                    DecodeBrrBlock(voice);
-
-                    WriteVoiceEndX(false, voice);
-                }
-
-                if (GetBitProperty(KeyOff, voice))
-                {
-                    _envStates[voice] = EnvState.Release;
-                }
-
-                _lastKeyOn = KeyOn;
-            }
-
             if (_brrInterpolatePosition[voice] < 0) // "preparing" sample
             {
                 _brrInterpolatePosition[voice]++;
@@ -341,70 +319,59 @@ public sealed class Dsp(byte[] aram)
             else 
             {
                 UpdateEnvelope(voice);
-
-                var pos = _brrInterpolatePosition[voice] >> 12;
-                var dist = (_brrInterpolatePosition[voice] >> 4) & 0xff;
-                var a = (GaussianCoefficients[255 - dist] * _brrDecodeBuffers[voice, pos]) >> 11;
-                var b = (GaussianCoefficients[511 - dist] * _brrDecodeBuffers[voice, (pos + 1) % 12]) >> 11;
-                var c = (GaussianCoefficients[256 + dist] * _brrDecodeBuffers[voice, (pos + 2) % 12]) >> 11;
-                var d = (GaussianCoefficients[dist] * _brrDecodeBuffers[voice, (pos + 3) % 12]) >> 11;
-
-
-                var sample = int.Clamp(((((a + b + c) & 0x7fff) ^ 0x4000) - 0x4000) + d, -0x4000, 0x3fff);
-                sample *= _envVolumes[voice];
-                sample >>= 10;
-                WriteVoiceOutX((sbyte)(sample >> 8), voice);
-                samplesL[voice] = (short)((sample * VoiceVolLeft(voice)) >> 7);
-                samplesR[voice] = (short)((sample * VoiceVolRight(voice)) >> 7);
                 
-                var oldInterpolatePosition = _brrInterpolatePosition[voice];
-                var newInterpolatePosition = oldInterpolatePosition + VoicePitch(voice);
-                if ((newInterpolatePosition & 0xc000) != (oldInterpolatePosition & 0xc000))
-                    DecodeBrrBlock(voice);
-                if (newInterpolatePosition >= 0xc000)
-                    newInterpolatePosition -= 0xc000;
-                _brrInterpolatePosition[voice] = newInterpolatePosition;
+                var sample = GenerateSample(voice);
+                
+                WriteVoiceOutX((sbyte)(sample >> 8), voice);
+                
+                samplesL[voice] = (short)(((sample * VoiceVolLeft(voice)) >> 7) << 1);
+                samplesR[voice] = (short)(((sample * VoiceVolRight(voice)) >> 7) << 1);
+                
+                AdvanceVoicePitch(voice);
             }
             WriteVoiceEnvX((byte)(_envVolumes[voice] >> 4), voice);
         }
-
-        short firL = 0;
-        short firR = 0;
-        if (!EchoDisable)
-        {
-            var enterFirL = (short)(_aram[(ushort)(EchoStartAddress + _echoIndex * 4)] |
-                                    ((_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 1)]) << 8));
-            var enterFirR = (short)(_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 2)] |
-                                    ((_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 3)]) << 8));
-            EnterFir((short)(enterFirL >> 1), (short)(enterFirR >> 1));
-            (firL, firR) = CalculateFirSample();
-        }
+        
         short dacL = 0;
         short dacR = 0;
+
         for (var i = 0; i < VoiceCount; i++)
         {
             dacL = short.CreateSaturating(dacL + samplesL[i]);
             dacR = short.CreateSaturating(dacR + samplesR[i]);
         }
-
-        var echoL = short.CreateSaturating(dacL + ((firL * EchoFeedback) >> 7));
-        var echoR = short.CreateSaturating(dacR + ((firR * EchoFeedback) >> 7));
-        
-        echoL &= ~1;
-        echoR &= ~1;
         
         dacL = (short)((dacL * MainVolLeft) >> 7);
         dacR = (short)((dacR * MainVolRight) >> 7);
-        
-        dacL = short.CreateSaturating(dacL + ((firL * EchoVolLeft) >> 7));
-        dacR = short.CreateSaturating(dacR + ((firR * EchoVolRight) >> 7));
 
         if (!EchoDisable)
         {
-            _aram[(ushort)(EchoStartAddress + _echoIndex * 4)] = (byte)echoL;
-            _aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 1)] = (byte)(echoL >> 8);
-            _aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 2)] = (byte)echoR;
-            _aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 3)] = (byte)(echoR >> 8);
+            var (enterFirL, enterFirR) = ReadEchoBuffer();
+            EnterFir((short)(enterFirL >> 1), (short)(enterFirR >> 1));
+            var (firL, firR) = CalculateFirSample();
+            
+            dacL = short.CreateSaturating(dacL + ((firL * EchoVolLeft) >> 7));
+            dacR = short.CreateSaturating(dacR + ((firR * EchoVolRight) >> 7));
+            
+            short echoL = 0;
+            short echoR = 0;
+            
+            for (var i = 0; i < VoiceCount; i++)
+            {
+                if (!VoiceEchoOn(i)) 
+                    continue;
+                echoL = short.CreateSaturating(echoL + samplesL[i]);
+                echoR = short.CreateSaturating(echoR + samplesR[i]);
+            }
+            
+            echoL = short.CreateSaturating(echoL + ((firL * EchoFeedback) >> 7));
+            echoR = short.CreateSaturating(echoR + ((firR * EchoFeedback) >> 7));
+            
+            echoL &= ~1;
+            echoR &= ~1;
+            
+            WriteToEchoBuffer(echoL, echoR);
+            
             if (_echoIndex == 0)
                 _echoIndexMax = EchoDelay << 9;
             _echoIndex++;
@@ -413,14 +380,87 @@ public sealed class Dsp(byte[] aram)
         }
 
         _counter++;
-        if (!Mute)
+        if (!Mute) 
             return (short.CreateSaturating(dacL), short.CreateSaturating(dacR));
-        
         return (0, 0);
     }
 
+    private (short enterFirL, short enterFirR) ReadEchoBuffer()
+    {
+        var enterFirL = (short)(_aram[(ushort)(EchoStartAddress + _echoIndex * 4)] |
+                                (_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 1)] << 8));
+        var enterFirR = (short)(_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 2)] |
+                                (_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 3)] << 8));
+        return (enterFirL, enterFirR);
+    }
+
+    private void PollKeyOnAndKeyOff(byte toggleKeyOn, int voice)
+    {
+        if (TestBitFlag(toggleKeyOn, voice))
+        {
+            _brrBlockIndex[voice] = 0;
+            _brrBufferIndex[voice] = 0;
+            _brrBlockAddress[voice] = SampleStartAddress(voice);
+            _envStates[voice] = EnvState.Attack;
+            _envVolumes[voice] = 0;
+            _brrInterpolatePosition[voice] = -5;
+            DecodeBrrBlock(voice);
+            DecodeBrrBlock(voice);
+            DecodeBrrBlock(voice);
+
+            WriteVoiceEndX(false, voice);
+        }
+
+        if (TestBitFlag(KeyOff, voice))
+        {
+            _envStates[voice] = EnvState.Release;
+        }
+    }
+
+    private void WriteToEchoBuffer(short echoL, short echoR)
+    {
+        _aram[(ushort)(EchoStartAddress + _echoIndex * 4)] = (byte)echoL;
+        _aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 1)] = (byte)(echoL >> 8);
+        _aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 2)] = (byte)echoR;
+        _aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 3)] = (byte)(echoR >> 8);
+    }
+
+    private void AdvanceVoicePitch(int voice)
+    {
+        var oldInterpolatePosition = _brrInterpolatePosition[voice];
+        var newInterpolatePosition = oldInterpolatePosition + VoicePitch(voice);
+        if ((newInterpolatePosition & 0xc000) != (oldInterpolatePosition & 0xc000))
+            DecodeBrrBlock(voice);
+        if (newInterpolatePosition >= 0xc000)
+            newInterpolatePosition -= 0xc000;
+        _brrInterpolatePosition[voice] = newInterpolatePosition;
+    }
+
+    private short GenerateSample(int voice)
+    {
+        static int SignExtend15Bit(int val) => ((short)(val << 1)) >> 1;
+
+        var pos = _brrInterpolatePosition[voice] >> 12;
+        var dist = (_brrInterpolatePosition[voice] >> 4) & 0xff;
+        var a = (GaussianCoefficients[255 - dist] * _brrDecodeBuffers[voice, pos]) >> 11;
+        var b = (GaussianCoefficients[511 - dist] * _brrDecodeBuffers[voice, (pos + 1) % 12]) >> 11;
+        var c = (GaussianCoefficients[256 + dist] * _brrDecodeBuffers[voice, (pos + 2) % 12]) >> 11;
+        var d = (GaussianCoefficients[dist] * _brrDecodeBuffers[voice, (pos + 3) % 12]) >> 11;
+        
+        int sample;
+        if (VoiceNoiseOn(voice))
+            sample = SignExtend15Bit(_noiseSample);
+        else 
+            sample = int.Clamp(SignExtend15Bit((a + b + c) & 0x7fff) + d, -0x4000, 0x3fff);
+        
+        sample *= _envVolumes[voice];
+        sample >>= 11;
+        
+        return (short)sample;
+    }
+
     private readonly (short FirL, short FirR)[] _firBuffer = new (short, short)[8];
-    private int _firBufferPos = 0;
+    private int _firBufferPos;
 
     private void EnterFir(short enterFirL, short enterFirR)
     {
@@ -472,7 +512,7 @@ public sealed class Dsp(byte[] aram)
         else // VxGAIN type envelope
         {
             var gain = VoiceGain(voice);
-            if ((gain & 0x80) != 0 && ShouldForThisSample(gain & 0x1f))
+            if ((gain & 0x80) != 0 && ShouldDoAtRate(gain & 0x1f))
             {
                 _envVolumes[voice] = (gain & 0b0110_0000) switch
                 {
@@ -496,7 +536,7 @@ public sealed class Dsp(byte[] aram)
         
         if (rate == 0xf)
             _envVolumes[voice] += 0x400;
-        else if (ShouldForThisSample((rate << 1) + 1))
+        else if (ShouldDoAtRate((rate << 1) + 1))
             _envVolumes[voice] += 32;
         
         if (_envVolumes[voice] > 0x7ff)
@@ -508,7 +548,7 @@ public sealed class Dsp(byte[] aram)
     
     private void DecayEnvelope(int voice)
     {
-        if (!ShouldForThisSample(0x10 + (VoiceAdsrDecayRate(voice) << 1)))
+        if (!ShouldDoAtRate(0x10 + (VoiceAdsrDecayRate(voice) << 1)))
             return;
 
         var newVol = ExponentialDecay(_envVolumes[voice]);
@@ -521,11 +561,11 @@ public sealed class Dsp(byte[] aram)
 
     private void SustainEnvelope(int voice)
     {
-        if (ShouldForThisSample(VoiceAdsrSustainRate(voice)))
+        if (ShouldDoAtRate(VoiceAdsrSustainRate(voice)))
             _envVolumes[voice] = ExponentialDecay(_envVolumes[voice]);
     }
 
-    private short ExponentialDecay(short envVol)
+    private static short ExponentialDecay(short envVol)
     {
         var newVol = envVol - (((envVol - 1) >> 8) + 1);
 

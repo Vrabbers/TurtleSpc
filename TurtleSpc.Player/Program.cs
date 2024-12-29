@@ -68,7 +68,10 @@ static unsafe SDL_AppResult SDL_AppIterate(nint appState)
     {
         for (var i = 0; i < buf.Length / 2; i++)
         {
+            SDL_SetRenderDrawColor(renderer, 100, 100, 255, 255);
             SDL_RenderPoint(renderer, (i * 640) / (buf.Length / 2), 240 + (buf[2 * i] * 480) / short.MaxValue);
+            
+            SDL_SetRenderDrawColor(renderer, 255, 100, 100, 255);
             SDL_RenderPoint(renderer, (i * 640) / (buf.Length / 2), 240 + (buf[2 * i + 1] * 480) / short.MaxValue);
         }
     }
@@ -76,6 +79,8 @@ static unsafe SDL_AppResult SDL_AppIterate(nint appState)
     {
         SDL_UnlockAudioStream(stream);
     }
+
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
 
 #if DEBUG
     if (spc is not null)
