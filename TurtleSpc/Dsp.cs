@@ -110,7 +110,6 @@ public sealed class Dsp(byte[] aram)
     ];
     
     private const int VoiceCount = 8;
-    private const int VoiceRegMask = 0x0f;
     private const int VoiceEnvXAddress = 0x08;
     private const int VoiceEndXAddress = 0x7c;
     private const int VoiceOutXAddress = 0x09;
@@ -121,7 +120,6 @@ public sealed class Dsp(byte[] aram)
     private readonly short[] _envVolumes = new short[VoiceCount];
     private readonly EnvState[] _envStates = new EnvState[VoiceCount];
     private byte _lastKeyOn;
-    private readonly short[] _lastSample = new short[VoiceCount];
 
     private ushort _noiseSample = 1;
 
@@ -157,12 +155,12 @@ public sealed class Dsp(byte[] aram)
 
     private void WriteVoiceEnvX(byte value, int voice)
     {
-        _regs[BytePropertyAddress(0x8, voice)] = value;
+        _regs[BytePropertyAddress(VoiceEnvXAddress, voice)] = value;
     }
 
     private void WriteVoiceOutX(sbyte value, int voice)
     {
-        _regs[BytePropertyAddress(0x9, voice)] = (byte)value;
+        _regs[BytePropertyAddress(VoiceOutXAddress, voice)] = (byte)value;
     }
 
     private sbyte MainVolLeft => (sbyte)_regs[0x0c];
@@ -224,7 +222,8 @@ public sealed class Dsp(byte[] aram)
         (header & 0x02) != 0,
         (header & 0x01) != 0
     );
-    
+    private static int SignExtend15Bit(int val) => (((short)(val << 1)) >> 1);
+
     private void DecodeBrrBlock(int voice)
     {
         static short SignExtendLeast4Bits(byte v) => (short)((sbyte)(v << 4) >> 4);
@@ -270,7 +269,7 @@ public sealed class Dsp(byte[] aram)
                 3 => sample + 115 * _brrDecodeBuffers[voice, prev1] / 64 - 13 * _brrDecodeBuffers[voice, prev2] / 16,
                 _ => throw new UnreachableException()
             };
-            _brrDecodeBuffers[voice, bufferIndex] = (short)(sample & 0xfffe);
+            _brrDecodeBuffers[voice, bufferIndex] = (short)SignExtend15Bit(short.CreateSaturating(sample));
             bufferIndex++;
         }
 
@@ -438,8 +437,6 @@ public sealed class Dsp(byte[] aram)
 
     private short GenerateSample(int voice)
     {
-        static int SignExtend15Bit(int val) => ((short)(val << 1)) >> 1;
-
         var pos = _brrInterpolatePosition[voice] >> 12;
         var dist = (_brrInterpolatePosition[voice] >> 4) & 0xff;
         var a = (GaussianCoefficients[255 - dist] * _brrDecodeBuffers[voice, pos]) >> 11;
