@@ -114,12 +114,13 @@ public sealed class Dsp(byte[] aram)
     private const int VoiceEndXAddress = 0x7c;
     private const int VoiceOutXAddress = 0x09;
     private const int EndXAddress = 0x7c;
+    private const int KeyOnAddress = 0x4c;
 
     private readonly byte[] _regs = new byte[128];
     private byte[] _aram = aram;
     private readonly short[] _envVolumes = new short[VoiceCount];
     private readonly EnvState[] _envStates = new EnvState[VoiceCount];
-    private byte _lastKeyOn;
+    private bool _keyOnWritten;
 
     private ushort _noiseSample = 1;
 
@@ -167,7 +168,7 @@ public sealed class Dsp(byte[] aram)
     private sbyte MainVolRight => (sbyte)_regs[0x1c];
     private sbyte EchoVolLeft => (sbyte)_regs[0x2c];
     private sbyte EchoVolRight => (sbyte)_regs[0x3c];
-    private byte KeyOn => _regs[0x4c];
+    private byte KeyOn => _regs[KeyOnAddress];
 
     private byte KeyOff => _regs[0x5c];
     private bool Reset => TestBitFlag(_regs[0x6c], 7);
@@ -299,11 +300,20 @@ public sealed class Dsp(byte[] aram)
         
         if (_counter % 2 == 0)
         {
-            var toggleKeyOn = (byte)(~_lastKeyOn & KeyOn);
-            _lastKeyOn = KeyOn;
-            
-            for (var voice = 0; voice < VoiceCount; voice++) 
-                PollKeyOnAndKeyOff(toggleKeyOn, voice);
+            if (_keyOnWritten)
+            {
+                _keyOnWritten = false;
+                if (KeyOn != 0)
+                    PollKeyOn();
+            }
+
+            for (var voice = 0; voice < VoiceCount; voice++)
+            {
+                if (TestBitFlag(KeyOff, voice))
+                {
+                    _envStates[voice] = EnvState.Release;
+                }
+            }
         }
         
         for (var voice = 0; voice < VoiceCount; voice++)
@@ -379,24 +389,20 @@ public sealed class Dsp(byte[] aram)
         }
 
         _counter++;
-        if (!Mute) 
-            return (short.CreateSaturating(dacL), short.CreateSaturating(dacR));
-        return (0, 0);
+        
+        if (Mute) 
+            return (0, 0);
+        
+        return (short.CreateSaturating(dacL), short.CreateSaturating(dacR));
     }
 
-    private (short enterFirL, short enterFirR) ReadEchoBuffer()
+    private void PollKeyOn()
     {
-        var enterFirL = (short)(_aram[(ushort)(EchoStartAddress + _echoIndex * 4)] |
-                                (_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 1)] << 8));
-        var enterFirR = (short)(_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 2)] |
-                                (_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 3)] << 8));
-        return (enterFirL, enterFirR);
-    }
-
-    private void PollKeyOnAndKeyOff(byte toggleKeyOn, int voice)
-    {
-        if (TestBitFlag(toggleKeyOn, voice))
+        for (var voice = 0; voice < VoiceCount; voice++)
         {
+            if (!TestBitFlag(KeyOn, voice)) 
+                continue;
+            
             _brrBlockIndex[voice] = 0;
             _brrBufferIndex[voice] = 0;
             _brrBlockAddress[voice] = SampleStartAddress(voice);
@@ -409,11 +415,15 @@ public sealed class Dsp(byte[] aram)
 
             WriteVoiceEndX(false, voice);
         }
+    }
 
-        if (TestBitFlag(KeyOff, voice))
-        {
-            _envStates[voice] = EnvState.Release;
-        }
+    private (short enterFirL, short enterFirR) ReadEchoBuffer()
+    {
+        var enterFirL = (short)(_aram[(ushort)(EchoStartAddress + _echoIndex * 4)] |
+                                (_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 1)] << 8));
+        var enterFirR = (short)(_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 2)] |
+                                (_aram[(ushort)(EchoStartAddress + _echoIndex * 4 + 3)] << 8));
+        return (enterFirL, enterFirR);
     }
 
     private void WriteToEchoBuffer(short echoL, short echoR)
@@ -570,8 +580,17 @@ public sealed class Dsp(byte[] aram)
 
     public void Write(byte address, byte value)
     {
-        if (address == VoiceEndXAddress)
-            _regs[VoiceEndXAddress] = 0;
-        _regs[address] = value;
+        switch (address)
+        {
+            case VoiceEndXAddress:
+                _regs[VoiceEndXAddress] = 0;
+                break;
+            case KeyOnAddress:
+                _keyOnWritten = true;
+                goto default;
+            default:
+                _regs[address] = value;
+                break;
+        }
     }
 }
