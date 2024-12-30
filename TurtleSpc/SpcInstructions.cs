@@ -573,8 +573,14 @@ public sealed partial class Spc
                 WriteWordNoCarry(addr, valw);
                 return 6;
             case 0x5a: //CMPW YA, dp
-                //TODO: how does this actually work!?
-                throw new NotImplementedException();
+            {
+                var ya = (short)((Y << 8) | A);
+                var rhs = ReadWordNoCarry(DirectPageAddress(Read(PC++)));
+                var res = ya - rhs;
+                SetNZ((short)res);
+                _carry = res >= 0;
+                return 4;
+            }
             case 0x7a: // ADDW YA, dp
                 _carry = false;
                 valw = ReadWordNoCarry(DirectPageAddress(Read(PC++)));
@@ -808,7 +814,47 @@ public sealed partial class Spc
                 addr = DirectPageAddress(Read(PC++));
                 Write(addr, val);
                 return 5;
+            
+            case 0x0f: // BRK
+                Call((ushort)ReadWordCarry(0xffde));
+                Write(0x100 + SP, (byte)Status);
+                SP--;
+                _break = true;
+                _interrupt = false;
+                return 8;
+            
+            case 0xdf: // Decimal Adjust Add
+                if (_carry || A > 0x99)
+                {
+                    _carry = true;
+                    A += 0x60;
+                }
 
+                if (_halfCarry || (A & 0xf) > 0x9)
+                    A += 0x6;
+
+                SetNZ(A);
+                return 3;
+            case 0xbe: // Decimal Adjust Sub
+                if (!_carry || A > 0x99)
+                {
+                    _carry = false;
+                    A -= 0x60;
+                }
+
+                if (!_halfCarry || (A & 0xf) > 0x9)
+                    A -= 0x6;
+                
+                SetNZ(A);
+                return 3;
+            
+            case 0xef: // SLEEP (just ignore?)
+                Console.WriteLine("SLEEP found, ignoring");
+                return 3;
+            case 0xff: // STOP (just ignore?)
+                Console.WriteLine("STOP found, ignoring");
+                return 3;
+            
             // Set and clear bit
             case var _ when (instr & 0b0000_1111) == 0b0000_0010: //SET1 dp.b and CLR1 dp.b
             {
