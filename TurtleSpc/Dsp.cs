@@ -496,21 +496,36 @@ public sealed class Dsp(byte[] aram)
             switch (_envStates[voice])
             {
                 case EnvState.Attack:
-                    AttackEnvelope(voice);
+                    var rate = VoiceAdsrAttackRate(voice);
+        
+                    if (rate == 0xf)
+                        _envVolumes[voice] += 0x400;
+                    else if (ShouldDoAtRate((rate << 1) + 1))
+                        _envVolumes[voice] += 32;
+        
+                    if (_envVolumes[voice] > 0x7ff)
+                    {
+                        _envVolumes[voice] = 0x7ff;
+                        _envStates[voice] = EnvState.Decay;
+                    }
                     break;
                 case EnvState.Decay:
-                    DecayEnvelope(voice);
+                    if (ShouldDoAtRate(0x10 + (VoiceAdsrDecayRate(voice) << 1)))
+                        _envVolumes[voice] = ExponentialDecay(_envVolumes[voice]);
                     break;
                 case EnvState.Sustain:
-                    SustainEnvelope(voice);
+                    if (ShouldDoAtRate(VoiceAdsrSustainRate(voice)))
+                        _envVolumes[voice] = ExponentialDecay(_envVolumes[voice]);
                     break;
             }
         }
         else // VxGAIN type envelope
         {
             var gain = VoiceGain(voice);
-            if ((gain & 0x80) != 0 && ShouldDoAtRate(gain & 0x1f))
+            if ((gain & 0x80) != 0)
             {
+                if (!ShouldDoAtRate(gain & 0x1f))
+                    return;
                 _envVolumes[voice] = (gain & 0b0110_0000) switch
                 {
                     0b0000_0000 => short.Max(0, (short)(_envVolumes[voice] - 32)),
@@ -525,51 +540,27 @@ public sealed class Dsp(byte[] aram)
                 _envVolumes[voice] = (short)(gain << 4);
             }
         }
-    }
 
-    private void AttackEnvelope(int voice)
-    {
-        var rate = VoiceAdsrAttackRate(voice);
-        
-        if (rate == 0xf)
-            _envVolumes[voice] += 0x400;
-        else if (ShouldDoAtRate((rate << 1) + 1))
-            _envVolumes[voice] += 32;
-        
-        if (_envVolumes[voice] > 0x7ff)
+        if (_envVolumes[voice] is > 0x7ff or < 0)
         {
-            _envVolumes[voice] = 0x7ff;
-            _envStates[voice] = EnvState.Decay;
+            _envVolumes[voice] = short.Clamp(_envVolumes[voice], 0, 0x7ff);
+            if (_envStates[voice] == EnvState.Attack)
+                _envStates[voice] = EnvState.Decay;
         }
-    }
-    
-    private void DecayEnvelope(int voice)
-    {
-        if (!ShouldDoAtRate(0x10 + (VoiceAdsrDecayRate(voice) << 1)))
-            return;
-
-        var newVol = ExponentialDecay(_envVolumes[voice]);
-
-        if ((newVol >> 7) == VoiceAdsrSustainLevel(voice))
+        
+        if (_envStates[voice] == EnvState.Decay && _envVolumes[voice] >> 8 == VoiceAdsrSustainLevel(voice))
             _envStates[voice] = EnvState.Sustain;
-
-        _envVolumes[voice] = newVol;
-    }
-
-    private void SustainEnvelope(int voice)
-    {
-        if (ShouldDoAtRate(VoiceAdsrSustainRate(voice)))
-            _envVolumes[voice] = ExponentialDecay(_envVolumes[voice]);
+        
     }
 
     private static short ExponentialDecay(short envVol)
     {
-        var newVol = envVol - (((envVol - 1) >> 8) + 1);
+        envVol -= (short)(((envVol - 1) >> 8) + 1);
 
-        if (newVol < 0)
-            newVol = 0;
+        if (envVol < 0)
+            envVol = 0;
 
-        return (short)newVol;
+        return envVol;
     }
 
     public byte Read(byte address)
@@ -579,6 +570,8 @@ public sealed class Dsp(byte[] aram)
 
     public void Write(byte address, byte value)
     {
+        if (address == VoiceEndXAddress)
+            _regs[VoiceEndXAddress] = 0;
         _regs[address] = value;
     }
 }
