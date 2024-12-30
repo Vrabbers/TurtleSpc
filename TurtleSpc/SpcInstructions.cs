@@ -146,7 +146,6 @@ public sealed partial class Spc
         return newVal;
     }
 
-    // Sets N and Z flags appropriately, passing the value through.
     private void SetNZ(byte val)
     {
         _zero = val == 0;
@@ -179,15 +178,14 @@ public sealed partial class Spc
         var upper = Read(address + 1);
         return (short)((upper << 8) | lower);
     }
-    
+
     private void WriteWordNoCarry(int address, int word)
     {
         Write(address, (byte)word);
         Write((address & 0xff00) | (byte)(address + 1), (byte)(word >> 8));
     }
-    
-    
-     public int StepInstruction()
+
+    public int StepInstruction()
     {
         var instr = Read(PC);
         //Console.WriteLine($"{PC:X4}  A:{A:X2} X:{X:X2} Y:{Y:X2} SP:{SP:X2} PSW:{(byte)Status:X2}");
@@ -198,7 +196,6 @@ public sealed partial class Spc
         short valw;
         switch (instr)
         {
-            // Misc. instructions
             case 0x00: // NOP
                 return 2;
 
@@ -814,7 +811,7 @@ public sealed partial class Spc
                 addr = DirectPageAddress(Read(PC++));
                 Write(addr, val);
                 return 5;
-            
+
             case 0x0f: // BRK
                 Call((ushort)ReadWordCarry(0xffde));
                 Write(0x100 + SP, (byte)Status);
@@ -822,16 +819,17 @@ public sealed partial class Spc
                 _break = true;
                 _interrupt = false;
                 return 8;
-            
+
             case 0xdf: // Decimal Adjust Add
                 if (_carry || A > 0x99)
                 {
                     _carry = true;
                     A += 0x60;
                 }
-
                 if (_halfCarry || (A & 0xf) > 0x9)
+                {
                     A += 0x6;
+                }
 
                 SetNZ(A);
                 return 3;
@@ -841,20 +839,21 @@ public sealed partial class Spc
                     _carry = false;
                     A -= 0x60;
                 }
-
                 if (!_halfCarry || (A & 0xf) > 0x9)
+                {
                     A -= 0x6;
-                
+                }
+
                 SetNZ(A);
                 return 3;
-            
+
             case 0xef: // SLEEP (just ignore?)
                 Console.WriteLine("SLEEP found, ignoring");
                 return 3;
             case 0xff: // STOP (just ignore?)
                 Console.WriteLine("STOP found, ignoring");
                 return 3;
-            
+
             // Set and clear bit
             case var _ when (instr & 0b0000_1111) == 0b0000_0010: //SET1 dp.b and CLR1 dp.b
             {
@@ -902,9 +901,9 @@ public sealed partial class Spc
             // OR, AND, EOR, CMP, ADC, SBC
             case var _ when (instr & 0x0f) >= 4 && (instr & 0x0f) <= 9 && instr <= 0xb9:
                 return AluInstruction(instr);
-            
+
             default:
-                throw new NotImplementedException($"Instruction 0x{instr:X2} not supported");
+                throw new UnreachableException();
         }
     }
 

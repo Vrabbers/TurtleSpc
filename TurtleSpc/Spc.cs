@@ -1,7 +1,5 @@
 namespace TurtleSpc;
 
-using System.Diagnostics;
-
 [Flags]
 public enum StatusWord : byte
 {
@@ -69,7 +67,7 @@ public sealed partial class Spc
     private bool _directPage;
     private bool _overflow;
     private bool _negative;
-    
+
     private const int Division64kHz = 1024 / 64;
     private const int Division32kHz = 1024 / 32;
     private const int Division8kHz = 1024 / 8;
@@ -91,24 +89,18 @@ public sealed partial class Spc
     private int _timer2Counter;
 
     private int Control => Memory[ControlAddress];
-
     private int Timer0Div => Memory[T0TargetAddress];
-
     private int Timer1Div => Memory[T1TargetAddress];
-    
     private int Timer2Div => Memory[T2TargetAddress];
-    
     private ref byte Timer0Out => ref Memory[T0OutAddress];
-
     private ref byte Timer1Out => ref Memory[T1OutAddress];
-
     private ref byte Timer2Out => ref Memory[T2OutAddress];
 
     private int DirectPageAddress(byte offset) => (_directPage ? 0x100 : 0x000) + offset;
 
     private void Write(int address, byte value)
     {
-        address &= 0xffff;
+        var addr = (ushort)address;
 #if DEBUG
         if (Dsp is null)
             Memory[(ushort)address] = value; // Regular memory read.
@@ -152,17 +144,17 @@ public sealed partial class Spc
             case 0xf7:
                 return;
             default:
-                Memory[(ushort)address] = value;
+                Memory[addr] = value;
                 return;
         }
     }
 
     private byte Read(int address)
     {
-        address &= 0xffff;
+        var addr = (ushort)address;
 #if DEBUG
         if (Dsp is null)
-            return Memory[(ushort)address]; // Regular memory read.
+            return Memory[addr]; // Regular memory read.
 #endif
         switch (address)
         {
@@ -171,11 +163,11 @@ public sealed partial class Spc
             case T0OutAddress:
             case T1OutAddress:
             case T2OutAddress:
-                var x = Memory[(ushort)address]; // Timer reads reset the timer.
-                Memory[(ushort)address] = 0;
+                var x = Memory[addr]; // Timer reads reset the timer.
+                Memory[addr] = 0;
                 return x;
             default:
-                return Memory[(ushort)address]; // Regular memory read.
+                return Memory[addr]; // Regular memory read.
         }
     }
 
@@ -240,10 +232,10 @@ public sealed partial class Spc
             }
         }
 
-        return _cpuTicksElapsed % Division32kHz < oldElapsed % Division32kHz; 
+        return _cpuTicksElapsed % Division32kHz < oldElapsed % Division32kHz;
         // returns whether DSP should produce sample.
     }
-    
+
     public static Spc FromSpcFileStream(Stream stream)
     {
         using var reader = new BinaryReader(stream);
@@ -252,10 +244,12 @@ public sealed partial class Spc
         var a = reader.ReadByte();
         var x = reader.ReadByte();
         var y = reader.ReadByte();
-        var psw = (StatusWord) reader.ReadByte();
+        var psw = (StatusWord)reader.ReadByte();
         var s = reader.ReadByte();
         stream.Seek(0x100, SeekOrigin.Begin);
         var ram = reader.ReadBytes(0x1_0000);
+        if (ram.Length != 0x1_0000)
+            throw new InvalidDataException("Invalid file");
         var dsp = new Dsp(ram);
         for (var i = 0; i < 128; i++)
         {
